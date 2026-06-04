@@ -132,9 +132,13 @@ final class AppViewModel {
         members.filter { !$0.isDeceased && $0.status == "APPROVED" }
     }
 
+    var approvedMembers: [Member] {
+        members.filter { $0.status == "APPROVED" }
+    }
+
     var visibleMembers: [Member] {
         let resolved = FamilyUtils.populateAllLinks(
-            members: activeMembers,
+            members: approvedMembers,
             allMembers: members + pendingMembers,
             currentUser: currentUser
         )
@@ -244,7 +248,7 @@ final class AppViewModel {
     private func familyEvents(withinDays limit: Int, referenceDate: Date = .now) -> [DashboardFamilyEvent] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: referenceDate)
-        let remembranceMembers = currentUser?.isAdmin == true ? members + pendingMembers : activeMembers
+        let remembranceMembers = currentUser?.isAdmin == true ? members + pendingMembers : approvedMembers
         var events: [DashboardFamilyEvent] = []
         var anniversaryKeys = Set<String>()
 
@@ -1592,7 +1596,7 @@ final class AppViewModel {
 
         autoRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 60_000_000_000)
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
                 if Task.isCancelled { break }
                 await self?.refreshAllDataSilently()
             }

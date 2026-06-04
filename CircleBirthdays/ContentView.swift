@@ -51,6 +51,7 @@ private func localized(_ english: String, language: AppLanguage) -> String {
         "Birthday": "जन्मदिन",
         "Anniversary": "वर्षगांठ",
         "Birth Anniversary": "जयंती",
+        "Punya Tithi": "पुण्यतिथि",
         "Remembrance Day": "पुण्यतिथि",
         "Messages": "संदेश",
         "Notifications": "सूचनाएं",
@@ -256,14 +257,14 @@ private struct AppBackground<Content: View>: View {
             Image("Background")
                 .resizable()
                 .scaledToFill()
-                .overlay(AndroidLook.lightGolden.opacity(0.30))
+                .opacity(0.88)
                 .ignoresSafeArea()
 
             LinearGradient(
                 colors: [
-                    AndroidLook.lightGolden.opacity(0.48),
-                    AndroidLook.cream.opacity(0.30),
-                    AndroidLook.lightGolden.opacity(0.36)
+                    AndroidLook.lightGolden.opacity(0.16),
+                    AndroidLook.cream.opacity(0.08),
+                    AndroidLook.lightGolden.opacity(0.12)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -485,8 +486,6 @@ private struct DashboardScreen: View {
                                     layoutScale: layoutScale
                                 )
 
-                                TodayPanchangTile(language: viewModel.language)
-
                                 if !viewModel.todayEvents.isEmpty {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Text(localized("Events Today", language: viewModel.language))
@@ -567,16 +566,11 @@ private struct DashboardScreen: View {
                         .sheet(item: $viewingSelf) { member in
                             MemberDetailScreen(
                                 member: member,
-                                allMembers: viewModel.allResolvedMembers,
                                 canEdit: viewModel.canEdit(member),
                                 language: viewModel.language,
                                 onEdit: {
                                     viewingSelf = nil
                                     editingSelf = member
-                                },
-                                onTree: {
-                                    viewingSelf = nil
-                                    viewModel.showFamilyTree()
                                 },
                                 onClose: {
                                     viewingSelf = nil
@@ -753,16 +747,11 @@ private struct ProfilesScreen: View {
                 .sheet(item: $viewingMember) { member in
                     MemberDetailScreen(
                         member: member,
-                        allMembers: viewModel.allResolvedMembers,
                         canEdit: viewModel.canEdit(member),
                         language: viewModel.language,
                         onEdit: {
                             viewingMember = nil
                             editingMember = member
-                        },
-                        onTree: {
-                            viewingMember = nil
-                            treeMember = member
                         },
                         onClose: {
                             viewingMember = nil
@@ -1004,8 +993,8 @@ private struct GalleryScreen: View {
                 .sheet(isPresented: $showEditor) {
                     MemoryEditorSheet(viewModel: viewModel, onClose: { showEditor = false })
                 }
-                .sheet(item: $selectedMemory) { memory in
-                    MemoryDetailSheet(viewModel: viewModel, memory: memory, onClose: { selectedMemory = nil })
+                .fullScreenCover(item: $selectedMemory) { memory in
+                    FullScreenMemoryPhotoView(memory: memory, onClose: { selectedMemory = nil })
                 }
                 .sheet(item: $pendingDeletionRequest) { request in
                     DeletionRequestSheet(
@@ -2067,7 +2056,7 @@ private struct CalendarScreen: View {
                 events.append("Anniversary: \(member.name)")
             }
             if let bereavementDate = member.bereavementDate, matchesMonthDay(bereavementDate, date: date) {
-                events.append("Remembrance: \(member.name)")
+                events.append("Punya Tithi: \(member.name)")
             }
         }
     }
@@ -2443,6 +2432,108 @@ private struct MemoryCard: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
             }
+    }
+}
+
+private struct FullScreenMemoryPhotoView: View {
+    let memory: MemoryPost
+    let onClose: () -> Void
+    @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            if let url = URL(string: memory.imageURL), !memory.imageURL.isEmpty {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFit()
+                            .scaleEffect(scale)
+                            .offset(offset)
+                            .gesture(zoomGesture.simultaneously(with: dragGesture))
+                            .onTapGesture(count: 2) {
+                                resetZoom()
+                            }
+                    case .empty:
+                        ProgressView()
+                            .tint(.white)
+                    default:
+                        ContentUnavailableView("Photo", systemImage: "photo", description: Text("Unable to load image."))
+                            .foregroundStyle(.white)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ContentUnavailableView("Photo", systemImage: "photo", description: Text("No image available."))
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Spacer()
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.headline.weight(.bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 42, height: 42)
+                            .background(.black.opacity(0.55), in: Circle())
+                    }
+                }
+
+                Spacer()
+
+                if !memory.caption.isEmpty {
+                    Text(memory.caption)
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.black.opacity(0.45), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+            }
+            .padding(16)
+        }
+    }
+
+    private var zoomGesture: some Gesture {
+        MagnificationGesture()
+            .onChanged { value in
+                scale = min(max(lastScale * value, 1), 5)
+            }
+            .onEnded { _ in
+                lastScale = scale
+                if scale == 1 {
+                    offset = .zero
+                    lastOffset = .zero
+                }
+            }
+    }
+
+    private var dragGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                guard scale > 1 else { return }
+                offset = CGSize(
+                    width: lastOffset.width + value.translation.width,
+                    height: lastOffset.height + value.translation.height
+                )
+            }
+            .onEnded { _ in
+                lastOffset = offset
+            }
+    }
+
+    private func resetZoom() {
+        scale = 1
+        lastScale = 1
+        offset = .zero
+        lastOffset = .zero
     }
 }
 
@@ -3777,7 +3868,7 @@ private struct FamilyEventRow: View {
         case .anniversary:
             return localized("Anniversary", language: language)
         case .remembrance:
-            return localized("Remembrance Day", language: language)
+            return localized("Punya Tithi", language: language)
         }
     }
 
@@ -4256,11 +4347,9 @@ private struct SocialLinkDot: View {
 
 private struct MemberDetailScreen: View {
     let member: Member
-    let allMembers: [Member]
     let canEdit: Bool
     let language: AppLanguage
     let onEdit: () -> Void
-    let onTree: () -> Void
     let onClose: () -> Void
 
     var body: some View {
@@ -4270,7 +4359,6 @@ private struct MemberDetailScreen: View {
                     header
                     profileSection
                     familySection
-                    familyTreeSection
                     socialSection
                 }
                 .padding(.horizontal, 16)
@@ -4285,9 +4373,6 @@ private struct MemberDetailScreen: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Edit", action: onEdit)
                     }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Tree", action: onTree)
                 }
             }
         }
@@ -4358,21 +4443,6 @@ private struct MemberDetailScreen: View {
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .background(Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-    }
-
-    private var familyTreeSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(localized("Family Tree", language: language))
-                .font(.headline)
-            Text("Based on `familyId` structure")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            FamilyTreeView(member: member, allMembers: allMembers)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -4607,22 +4677,30 @@ private struct FamilyTreeCanvas: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            ScrollView([.horizontal, .vertical], showsIndicators: true) {
-                VStack(spacing: 90) {
-                    ForEach(roots) { root in
-                        RecursiveFamilyNode(
-                            member: root,
-                            members: members,
-                            currentUserId: currentUser?.id,
-                            focusedId: focusedId,
-                            expandedIds: $expandedIds,
-                            onMemberTap: handleMemberTap
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    if treeBranches.isEmpty {
+                        ContentUnavailableView(
+                            "Family Tree",
+                            systemImage: "tree",
+                            description: Text("No family members are available to display.")
                         )
+                        .frame(maxWidth: .infinity, minHeight: 360)
+                    } else {
+                        ForEach(treeBranches) { branch in
+                            FamilyTreeBranchGrid(
+                                branch: branch,
+                                currentUserId: currentUser?.id,
+                                focusedId: focusedId,
+                                onMemberTap: handleMemberTap
+                            )
+                        }
                     }
                 }
-                .padding(180)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 18)
                 .scaleEffect(scale)
-                .frame(minWidth: 900, minHeight: 720)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .background(Color(red: 0.94, green: 0.92, blue: 0.88))
             .overlay(alignment: .top) {
@@ -4658,37 +4736,34 @@ private struct FamilyTreeCanvas: View {
         }
         .onAppear {
             if expandedIds.isEmpty {
-                expandedIds = Set(roots.map(\.id))
+                expandedIds = Set(members.map(\.id))
             }
         }
     }
 
-    private var roots: [Member] {
-        if let root = members.first(where: { $0.familyId == "P" }) {
-            return [root]
-        }
-
-        let nonSpouseMembers = members.filter { !$0.familyId.isEmpty && !$0.familyId.hasSuffix("0") }
-        let knownFamilyIds = Set(members.map(\.familyId))
-        let inferredRoots = nonSpouseMembers
-            .filter { member in
-                guard let parentId = parentFamilyId(for: member.familyId) else {
-                    return true
-                }
-                return !knownFamilyIds.contains(parentId)
+    private var treeBranches: [FamilyTreeBranch] {
+        let displayMembers = members
+            .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .sorted { lhs, rhs in
+                let comparison = lhs.familyId.localizedStandardCompare(rhs.familyId)
+                return comparison == .orderedSame ? lhs.name < rhs.name : comparison == .orderedAscending
             }
-            .sorted { $0.familyId < $1.familyId }
+        let grouped = Dictionary(grouping: displayMembers, by: branchKey(for:))
 
-        return inferredRoots.isEmpty
-            ? nonSpouseMembers.sorted { $0.familyId < $1.familyId }
-            : inferredRoots
+        return grouped.keys.sorted().map { key in
+            FamilyTreeBranch(id: key, title: branchTitle(for: key), members: grouped[key] ?? [])
+        }
     }
 
-    private func parentFamilyId(for familyId: String) -> String? {
-        guard !familyId.isEmpty, familyId != "P" else { return nil }
-        let baseId = familyId.hasSuffix("0") ? String(familyId.dropLast()) : familyId
-        guard baseId.count > 1 else { return nil }
-        return String(baseId.dropLast())
+    private func branchKey(for member: Member) -> String {
+        let trimmed = member.familyId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let first = trimmed.first else { return "#" }
+        let key = String(first).uppercased()
+        return key == "P" && trimmed.count > 1 ? String(trimmed.dropFirst().first ?? first).uppercased() : key
+    }
+
+    private func branchTitle(for key: String) -> String {
+        key == "#" ? "Family" : "Family \(key)"
     }
 
     private var treeToolbar: some View {
@@ -4796,7 +4871,83 @@ private struct FamilyTreeCanvas: View {
     private func resetTree() {
         focusedId = nil
         scale = 1
-        expandedIds = Set(roots.map(\.id))
+        expandedIds = Set(members.map(\.id))
+    }
+}
+
+private struct FamilyTreeBranch: Identifiable {
+    let id: String
+    let title: String
+    let members: [Member]
+
+    var generationRows: [(id: Int, members: [Member])] {
+        let grouped = Dictionary(grouping: members, by: generation(for:))
+        return grouped.keys.sorted().map { generation in
+            (id: generation, members: (grouped[generation] ?? []).sorted { lhs, rhs in
+                let comparison = lhs.familyId.localizedStandardCompare(rhs.familyId)
+                return comparison == .orderedSame ? lhs.name < rhs.name : comparison == .orderedAscending
+            })
+        }
+    }
+
+    private func generation(for member: Member) -> Int {
+        let base = member.familyId.hasSuffix("0") ? String(member.familyId.dropLast()) : member.familyId
+        if base == "P" || base.isEmpty { return 0 }
+        return max(1, base.count)
+    }
+}
+
+private struct FamilyTreeBranchGrid: View {
+    let branch: FamilyTreeBranch
+    let currentUserId: String?
+    let focusedId: String?
+    let onMemberTap: (Member) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Text(branch.id)
+                    .font(.title3.weight(.black))
+                    .foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(Color.brown, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(branch.title)
+                        .font(.headline)
+                    Text("\(branch.members.count) members")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            ForEach(branch.generationRows, id: \.id) { row in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Generation \(row.id)")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 12) {
+                            ForEach(row.members) { member in
+                                TreeMemberCard(
+                                    member: member,
+                                    isSelf: member.id == currentUserId,
+                                    isFocused: member.id == focusedId,
+                                    onTap: { onMemberTap(member) }
+                                )
+                            }
+                        }
+                        .padding(.bottom, 2)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
@@ -4921,24 +5072,22 @@ private struct TreeMemberCard: View {
         Button(action: onTap) {
             VStack(spacing: 8) {
                 AvatarView(member: member, size: 58)
-                    .overlay(Circle().stroke(accent.opacity(0.45), lineWidth: 2))
+                    .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 2))
 
                 Text(member.name)
                     .font(.caption.weight(.bold))
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(.white)
                     .frame(height: 32)
 
-                if isSelf || !(member.relationship ?? "").isEmpty {
-                    Text(isSelf ? "Me" : member.relationship ?? "")
-                        .font(.caption2.weight(.bold))
-                        .foregroundStyle(accent)
-                        .lineLimit(1)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(accent.opacity(0.10), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
-                }
+                Text(relationshipText)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
+                    .frame(minHeight: 24)
             }
             .padding(10)
             .frame(width: 150)
@@ -4966,12 +5115,25 @@ private struct TreeMemberCard: View {
     private var cardFill: Color {
         let value = member.gender.lowercased()
         if value == "female" || value == "f" || value.contains("woman") || value.contains("स्त्री") {
-            return Color.pink.opacity(0.18)
+            return Color.pink.opacity(0.78)
         }
         if value == "male" || value == "m" || value.contains("man") {
-            return Color.blue.opacity(0.18)
+            return Color.blue.opacity(0.78)
         }
-        return Color.brown.opacity(0.12)
+        return Color.brown.opacity(0.70)
+    }
+
+    private var relationshipText: String {
+        if isSelf, let relationship = member.relationship, !relationship.isEmpty {
+            return "Me • \(relationship)"
+        }
+        if isSelf {
+            return "Me"
+        }
+        if let relationship = member.relationship, !relationship.isEmpty {
+            return relationship
+        }
+        return member.familyId.isEmpty ? "Relationship not set" : member.familyId
     }
 }
 

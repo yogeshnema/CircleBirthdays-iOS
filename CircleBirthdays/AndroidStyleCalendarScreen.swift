@@ -222,7 +222,6 @@ struct TodayPanchangTile: View {
 
 struct AndroidStyleCalendarScreen: View {
     @Bindable var viewModel: AppViewModel
-    @State private var monthOffset = 0
     @State private var selectedDate = Calendar.current.startOfDay(for: .now)
 
     private var calendar: Calendar {
@@ -232,51 +231,24 @@ struct AndroidStyleCalendarScreen: View {
     }
 
     var body: some View {
-        let month = calendar.date(byAdding: .month, value: monthOffset, to: monthStart(for: .now)) ?? monthStart(for: .now)
-        let panchangMap = PanchangGenerator.monthData(for: month, calendar: calendar, language: viewModel.language)
         let selected = calendar.startOfDay(for: selectedDate)
+        let selectedMonth = monthStart(for: selected)
+        let panchangMap = PanchangGenerator.monthData(for: selectedMonth, calendar: calendar, language: viewModel.language)
         let selectedPanchang = panchangMap[selected]
         let selectedEvents = familyEvents(on: selectedDate)
 
         CalendarBackground {
             NavigationStack {
-                GeometryReader { proxy in
-                    let safeHorizontalInset = proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing
-                    let inset = max(16.0, min(32.0, (proxy.size.width - safeHorizontalInset) * 0.05))
-                    VStack(spacing: 0) {
-                        VStack(spacing: 6) {
-                            monthSelector(month)
-                            weekdayHeader
-                            monthGrid(month: month, panchangMap: panchangMap)
-                        }
-                        .frame(maxHeight: min(340, max(286, proxy.size.height * 0.46)), alignment: .top)
-                        .padding(.horizontal, inset)
-                        .padding(.top, 10)
+                ScrollView {
+                    VStack(spacing: 14) {
+                        daySelector(selected)
 
-                        Divider().opacity(0.45)
-
-                        if proxy.size.width > 620 {
-                            HStack(spacing: 10) {
-                                selectedDetails(date: selectedDate, panchang: selectedPanchang, events: selectedEvents)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                panchangImage(month: month)
-                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            }
-                            .padding(.horizontal, inset)
-                            .padding(.vertical, 10)
-                        } else {
-                            ScrollView {
-                                VStack(spacing: 10) {
-                                    selectedDetails(date: selectedDate, panchang: selectedPanchang, events: selectedEvents)
-                                    panchangImage(month: month)
-                                        .frame(height: 360)
-                                }
-                                .padding(.horizontal, inset)
-                                .padding(.vertical, 10)
-                            }
-                        }
+                        selectedDetails(date: selectedDate, panchang: selectedPanchang, events: selectedEvents)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: 620, alignment: .top)
+                    .frame(maxWidth: .infinity)
                 }
                 .navigationTitle(viewModel.language == .hindi ? "हिंदू कैलेंडर" : "Hindu Calendar")
                 .navigationBarTitleDisplayMode(.inline)
@@ -290,7 +262,6 @@ struct AndroidStyleCalendarScreen: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button {
-                            monthOffset = 0
                             selectedDate = calendar.startOfDay(for: .now)
                         } label: {
                             Image(systemName: "calendar.badge.clock")
@@ -301,33 +272,57 @@ struct AndroidStyleCalendarScreen: View {
         }
     }
 
-    private func monthSelector(_ month: Date) -> some View {
-        HStack {
-            Button {
-                monthOffset -= 1
-                selectedDate = monthStart(for: calendar.date(byAdding: .month, value: monthOffset, to: .now) ?? .now)
-            } label: {
-                Image(systemName: "chevron.left")
+    private func daySelector(_ date: Date) -> some View {
+        VStack(spacing: 12) {
+            HStack {
+                Button {
+                    moveSelectedDate(by: -1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .frame(width: 38, height: 38)
+
+                Spacer()
+
+                VStack(spacing: 4) {
+                    Text(date.formatted(.dateTime.weekday(.wide)))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Text(date.formatted(.dateTime.day().month(.wide).year()))
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(Color.brown)
+                }
+
+                Spacer()
+
+                Button {
+                    moveSelectedDate(by: 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .frame(width: 38, height: 38)
             }
-            .frame(width: 34, height: 34)
 
-            Spacer()
-
-            Text(month.formatted(.dateTime.month(.wide).year()))
-                .font(.headline)
-                .foregroundStyle(Color.brown)
-
-            Spacer()
-
-            Button {
-                monthOffset += 1
-                selectedDate = monthStart(for: calendar.date(byAdding: .month, value: monthOffset, to: .now) ?? .now)
-            } label: {
-                Image(systemName: "chevron.right")
+            HStack(spacing: 10) {
+                Button(viewModel.language == .hindi ? "बीता कल" : "Yesterday") {
+                    moveSelectedDate(by: -1)
+                }
+                Button(viewModel.language == .hindi ? "आज" : "Today") {
+                    selectedDate = calendar.startOfDay(for: .now)
+                }
+                Button(viewModel.language == .hindi ? "आने वाला कल" : "Tomorrow") {
+                    moveSelectedDate(by: 1)
+                }
             }
-            .frame(width: 34, height: 34)
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.bordered)
         }
-        .buttonStyle(.bordered)
+        .padding(14)
+        .background(.white.opacity(0.88), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func moveSelectedDate(by days: Int) {
+        selectedDate = calendar.startOfDay(for: calendar.date(byAdding: .day, value: days, to: selectedDate) ?? selectedDate)
     }
 
     private var weekdayHeader: some View {
@@ -362,7 +357,8 @@ struct AndroidStyleCalendarScreen: View {
         let isToday = calendar.isDateInToday(date)
         let birthdays = birthdayMembers(on: date)
         let anniversaries = anniversaryMembers(on: date)
-        let hasFamilyEvent = !birthdays.isEmpty || !anniversaries.isEmpty
+        let punyaTithis = punyaTithiMembers(on: date)
+        let hasFamilyEvent = !birthdays.isEmpty || !anniversaries.isEmpty || !punyaTithis.isEmpty
 
         return Button {
             selectedDate = calendar.startOfDay(for: date)
@@ -389,7 +385,7 @@ struct AndroidStyleCalendarScreen: View {
                 }
 
                 if hasFamilyEvent {
-                    Image(systemName: birthdays.isEmpty ? "heart.fill" : "birthday.cake.fill")
+                    Image(systemName: familyEventIcon(birthdays: birthdays, anniversaries: anniversaries, punyaTithis: punyaTithis))
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(isSelected ? .white : .pink)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -413,68 +409,66 @@ struct AndroidStyleCalendarScreen: View {
     }
 
     private func selectedDetails(date: Date, panchang: PanchangDay?, events: [CalendarFamilyEvent]) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                if !events.isEmpty {
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(viewModel.language == .hindi ? "पारिवारिक कार्यक्रम" : "Family Events")
+        VStack(alignment: .leading, spacing: 10) {
+            if !events.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(viewModel.language == .hindi ? "पारिवारिक कार्यक्रम" : "Family Events")
+                        .font(.caption.bold())
+                        .foregroundStyle(.orange)
+                    ForEach(events) { event in
+                        HStack(spacing: 6) {
+                            Image(systemName: event.iconName)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            Text(event.member.name)
+                                .font(.caption.weight(.bold))
+                            Text("(\(event.label(language: viewModel.language)))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .padding(10)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            }
+
+            if let panchang {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(date.formatted(.dateTime.day().month(.abbreviated)))
+                        .font(.headline)
+                        .foregroundStyle(Color.brown)
+                    Divider()
+                    PanchangDetailLine(label: viewModel.language == .hindi ? "तिथि" : "Tithi", value: panchang.tithi, systemImage: "sun.max")
+                    PanchangDetailLine(label: viewModel.language == .hindi ? "नक्षत्र" : "Nakshatra", value: panchang.nakshatra, systemImage: "star")
+                    PanchangDetailLine(label: viewModel.language == .hindi ? "योग" : "Yoga", value: panchang.yoga, systemImage: "arrow.triangle.2.circlepath")
+                    PanchangDetailLine(label: viewModel.language == .hindi ? "करण" : "Karana", value: panchang.karana, systemImage: "info.circle")
+                    PanchangDetailLine(label: viewModel.language == .hindi ? "मुहूर्त" : "Muhurat", value: panchang.muhurat, systemImage: "clock")
+                    PanchangDetailLine(label: viewModel.language == .hindi ? "सूर्योदय" : "Sunrise", value: panchang.sunrise, systemImage: "sunrise")
+                    PanchangDetailLine(label: viewModel.language == .hindi ? "सूर्यास्त" : "Sunset", value: panchang.sunset, systemImage: "sunset")
+
+                    if panchang.isPanchak || panchang.note != nil {
+                        Text(panchang.note ?? (viewModel.language == .hindi ? "पञ्चक" : "Panchak"))
                             .font(.caption.bold())
-                            .foregroundStyle(.orange)
-                        ForEach(events) { event in
-                            HStack(spacing: 6) {
-                                Image(systemName: event.kind == .birthday ? "birthday.cake.fill" : "heart.fill")
-                                    .font(.caption)
-                                    .foregroundStyle(.orange)
-                                Text(event.member.name)
-                                    .font(.caption.weight(.bold))
-                                Text("(\(event.label(language: viewModel.language)))")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                            }
+                            .foregroundStyle(.red)
+                            .padding(7)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+
+                    if !panchang.festivals.isEmpty {
+                        Text(viewModel.language == .hindi ? "त्योहार" : "Festivals")
+                            .font(.caption.bold())
+                            .foregroundStyle(.red)
+                            .padding(.top, 4)
+                        ForEach(panchang.festivals, id: \.self) { festival in
+                            Text("• \(festival)")
+                                .font(.caption)
+                                .foregroundStyle(Color.brown)
                         }
                     }
-                    .padding(10)
-                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 }
-
-                if let panchang {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(date.formatted(.dateTime.day().month(.abbreviated)))
-                            .font(.headline)
-                            .foregroundStyle(Color.brown)
-                        Divider()
-                        PanchangDetailLine(label: viewModel.language == .hindi ? "तिथि" : "Tithi", value: panchang.tithi, systemImage: "sun.max")
-                        PanchangDetailLine(label: viewModel.language == .hindi ? "नक्षत्र" : "Nakshatra", value: panchang.nakshatra, systemImage: "star")
-                        PanchangDetailLine(label: viewModel.language == .hindi ? "योग" : "Yoga", value: panchang.yoga, systemImage: "arrow.triangle.2.circlepath")
-                        PanchangDetailLine(label: viewModel.language == .hindi ? "करण" : "Karana", value: panchang.karana, systemImage: "info.circle")
-                        PanchangDetailLine(label: viewModel.language == .hindi ? "मुहूर्त" : "Muhurat", value: panchang.muhurat, systemImage: "clock")
-                        PanchangDetailLine(label: viewModel.language == .hindi ? "सूर्योदय" : "Sunrise", value: panchang.sunrise, systemImage: "sunrise")
-                        PanchangDetailLine(label: viewModel.language == .hindi ? "सूर्यास्त" : "Sunset", value: panchang.sunset, systemImage: "sunset")
-
-                        if panchang.isPanchak || panchang.note != nil {
-                            Text(panchang.note ?? (viewModel.language == .hindi ? "पञ्चक" : "Panchak"))
-                                .font(.caption.bold())
-                                .foregroundStyle(.red)
-                                .padding(7)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(Color.red.opacity(0.10), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-                        }
-
-                        if !panchang.festivals.isEmpty {
-                            Text(viewModel.language == .hindi ? "त्योहार" : "Festivals")
-                                .font(.caption.bold())
-                                .foregroundStyle(.red)
-                                .padding(.top, 4)
-                            ForEach(panchang.festivals, id: \.self) { festival in
-                                Text("• \(festival)")
-                                    .font(.caption)
-                                    .foregroundStyle(Color.brown)
-                            }
-                        }
-                    }
-                    .padding(12)
-                    .background(.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                }
+                .padding(12)
+                .background(.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
         }
     }
@@ -527,9 +521,27 @@ struct AndroidStyleCalendarScreen: View {
         }
     }
 
+    private func punyaTithiMembers(on date: Date) -> [Member] {
+        visibleMembers.filter { member in
+            guard let bereavementDate = member.bereavementDate else { return false }
+            return matchesMonthDay(bereavementDate, date: date)
+        }
+    }
+
     private func familyEvents(on date: Date) -> [CalendarFamilyEvent] {
         birthdayMembers(on: date).map { CalendarFamilyEvent(member: $0, kind: .birthday) }
             + anniversaryMembers(on: date).map { CalendarFamilyEvent(member: $0, kind: .anniversary) }
+            + punyaTithiMembers(on: date).map { CalendarFamilyEvent(member: $0, kind: .punyaTithi) }
+    }
+
+    private func familyEventIcon(birthdays: [Member], anniversaries: [Member], punyaTithis: [Member]) -> String {
+        if !birthdays.isEmpty {
+            return "birthday.cake.fill"
+        }
+        if !anniversaries.isEmpty {
+            return "heart.fill"
+        }
+        return "leaf.fill"
     }
 
     private var visibleMembers: [Member] {
@@ -564,17 +576,10 @@ private struct CalendarBackground<Content: View>: View {
 
     var body: some View {
         ZStack {
-            Image("Background")
-                .resizable()
-                .scaledToFill()
-                .overlay(Color(red: 0xF5 / 255.0, green: 0xE6 / 255.0, blue: 0xBE / 255.0).opacity(0.30))
-                .ignoresSafeArea()
-
             LinearGradient(
                 colors: [
-                    Color(red: 0xF5 / 255.0, green: 0xE6 / 255.0, blue: 0xBE / 255.0).opacity(0.48),
-                    Color(red: 0xEF / 255.0, green: 0xEB / 255.0, blue: 0xE9 / 255.0).opacity(0.30),
-                    Color(red: 0xF5 / 255.0, green: 0xE6 / 255.0, blue: 0xBE / 255.0).opacity(0.36)
+                    Color(red: 0xF9 / 255.0, green: 0xF4 / 255.0, blue: 0xE8 / 255.0),
+                    Color(red: 0xEF / 255.0, green: 0xEB / 255.0, blue: 0xE9 / 255.0)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -590,6 +595,7 @@ private struct CalendarFamilyEvent: Identifiable {
     enum Kind {
         case birthday
         case anniversary
+        case punyaTithi
     }
 
     let member: Member
@@ -603,6 +609,19 @@ private struct CalendarFamilyEvent: Identifiable {
             return language == .hindi ? "जन्मदिन" : "Birthday"
         case .anniversary:
             return language == .hindi ? "वर्षगांठ" : "Anniversary"
+        case .punyaTithi:
+            return language == .hindi ? "पुण्यतिथि" : "Punya Tithi"
+        }
+    }
+
+    var iconName: String {
+        switch kind {
+        case .birthday:
+            return "birthday.cake.fill"
+        case .anniversary:
+            return "heart.fill"
+        case .punyaTithi:
+            return "leaf.fill"
         }
     }
 }

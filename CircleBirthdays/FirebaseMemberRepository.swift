@@ -158,15 +158,15 @@ private extension Member {
             familyId: data["familyId"] as? String ?? document.documentID,
             name: data["name"] as? String ?? "",
             gender: data["gender"] as? String ?? "",
-            dateOfBirth: data["dateOfBirth"] as? String ?? "",
+            dateOfBirth: Self.dateString(from: data["dateOfBirth"]) ?? "",
             phoneNumber: data["phoneNumber"] as? String ?? "",
             email: data["email"] as? String,
             location: data["location"] as? String,
             spouseName: data["spouseName"] as? String,
             fatherName: data["fatherName"] as? String,
             motherName: data["motherName"] as? String,
-            marriageDate: data["marriageDate"] as? String,
-            bereavementDate: data["bereavementDate"] as? String,
+            marriageDate: Self.dateString(from: data["marriageDate"]),
+            bereavementDate: Self.dateString(from: data["bereavementDate"]),
             photoURL: data["photoUrl"] as? String,
             immediateFamily: data["immediateFamily"] as? String ?? "",
             address: data["address"] as? String,
@@ -193,6 +193,16 @@ private extension Member {
             level: data["level"] as? Int ?? (data["level"] as? NSNumber)?.intValue ?? 1,
             badges: badges
         )
+    }
+
+    private static func dateString(from value: Any?) -> String? {
+        if let string = value as? String {
+            return string
+        }
+        if let timestamp = value as? Timestamp {
+            return Member.isoDateFormatter.string(from: timestamp.dateValue())
+        }
+        return nil
     }
 
     var firestoreData: [String: Any] {
