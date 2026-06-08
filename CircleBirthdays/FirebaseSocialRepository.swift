@@ -26,6 +26,16 @@ struct FirebaseSocialRepository: SocialRepository {
         #endif
     }
 
+    func submitDiscussion(_ discussion: DiscussionThread) async throws {
+        #if canImport(FirebaseFirestore)
+        try await firestore.collection("discussions")
+            .document(discussion.id)
+            .setData(discussion.firestoreData)
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
     func fetchRecipes() async throws -> [Recipe] {
         #if canImport(FirebaseFirestore)
         let snapshot = try await firestore.collection("recipes").getDocuments()
@@ -431,7 +441,7 @@ struct FirebaseSocialRepository: SocialRepository {
     func fetchActiveGameSessions() async throws -> [GameSession] {
         #if canImport(FirebaseFirestore)
         let snapshot = try await firestore.collection("game_sessions")
-            .whereField("status", isEqualTo: "WAITING")
+            .whereField("status", in: ["WAITING", "ACTIVE"])
             .limit(to: 20)
             .getDocuments()
         return snapshot.documents.compactMap(GameSession.init(document:)).sorted { $0.lastUpdated > $1.lastUpdated }
@@ -472,37 +482,45 @@ struct FirebaseSocialRepository: SocialRepository {
     func joinGameSession(sessionID: String, player: Member) async throws {
         #if canImport(FirebaseFirestore)
         let ref = firestore.collection("game_sessions").document(sessionID)
-        let snapshot = try await ref.getDocument()
-        guard let session = GameSession(document: snapshot) else { return }
+        _ = try await firestore.runTransaction { transaction, errorPointer -> Any? in
+            let snapshot: DocumentSnapshot
+            do {
+                snapshot = try transaction.getDocument(ref)
+            } catch let error as NSError {
+                errorPointer?.pointee = error
+                return nil
+            }
 
-        if session.players.contains(player.id) {
-            return
+            guard let session = GameSession(document: snapshot) else { return nil }
+            if session.players.contains(player.id) || session.players.count >= 2 || session.status != "WAITING" {
+                return nil
+            }
+
+            let players = session.players + [player.id]
+            var playerNames = session.playerNames
+            playerNames[player.id] = player.name
+
+            var state = session.gameState
+            if session.gameType == .rummy {
+                state = rummyState(firstPlayerID: session.players.first ?? player.id, secondPlayerID: player.id)
+            } else if session.gameType == .hangman {
+                state = hangmanState()
+            } else if session.gameType == .chess, state["board"] == nil {
+                state["board"] = Self.initialChessBoard()
+            } else if session.gameType == .chaupad, state["p1_pieces"] == nil {
+                state["p1_pieces"] = [0, 0, 0, 0]
+                state["p2_pieces"] = [0, 0, 0, 0]
+            }
+
+            transaction.updateData([
+                "players": players,
+                "playerNames": playerNames,
+                "status": "ACTIVE",
+                "gameState": state,
+                "lastUpdated": Self.currentMillis()
+            ], forDocument: ref)
+            return nil
         }
-        guard session.players.count < 2 else { return }
-
-        let players = session.players + [player.id]
-        var playerNames = session.playerNames
-        playerNames[player.id] = player.name
-
-        var state = session.gameState
-        if session.gameType == .rummy {
-            state = rummyState(firstPlayerID: session.players.first ?? player.id, secondPlayerID: player.id)
-        } else if session.gameType == .hangman {
-            state = hangmanState()
-        } else if session.gameType == .chess, state["board"] == nil {
-            state["board"] = Self.initialChessBoard()
-        } else if session.gameType == .chaupad, state["p1_pieces"] == nil {
-            state["p1_pieces"] = [0, 0, 0, 0]
-            state["p2_pieces"] = [0, 0, 0, 0]
-        }
-
-        try await ref.updateData([
-            "players": players,
-            "playerNames": playerNames,
-            "status": "ACTIVE",
-            "gameState": state,
-            "lastUpdated": Self.currentMillis()
-        ])
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif
@@ -616,6 +634,8 @@ struct FirebaseSocialRepository: SocialRepository {
             "MOVIES": ["INCEPTION", "AVATAR", "TITANIC", "GLADIATOR", "JOKER", "SHOLAY", "DANGAL", "INTERSTELLAR", "BAHUBALI", "LAGAAN", "PARASITE", "HAMILTON"],
             "COUNTRIES": ["INDIA", "BRAZIL", "CANADA", "GERMANY", "JAPAN", "FRANCE", "AUSTRALIA", "ARGENTINA", "EGYPT", "THAILAND", "NORWAY", "MEXICO"],
             "FRUITS": ["ORANGE", "BANANA", "CHERRY", "MANGO", "PINEAPPLE", "WATERMELON", "POMEGRANATE", "KIWI", "AVOCADO", "STRAWBERRY", "GUAVA"],
+            "BIRDS": ["PEACOCK", "PARROT", "EAGLE", "SPARROW", "PENGUIN", "FLAMINGO", "WOODPECKER", "HUMMINGBIRD", "OSTRICH", "KINGFISHER"],
+            "PROFESSIONS": ["ENGINEER", "DOCTOR", "ASTRONAUT", "TEACHER", "CHEF", "FARMER", "PILOT", "SCIENTIST", "LAWYER", "ARTIST"],
             "SPORTS": ["CRICKET", "FOOTBALL", "BASKETBALL", "TENNIS", "HOCKEY", "BADMINTON", "VOLLEYBALL", "KABADDI", "CHESS"]
         ]
         let category = categories.keys.randomElement() ?? "ANIMALS"
@@ -708,6 +728,27 @@ private extension MemoryPost {
 }
 
 private extension DiscussionThread {
+    var firestoreData: [String: Any] {
+        [
+            "id": id,
+            "userId": userId,
+            "userName": userName,
+            "type": type.rawValue,
+            "title": title,
+            "content": content,
+            "pollOptions": pollOptions.map { option in
+                [
+                    "id": option.id,
+                    "text": option.text,
+                    "voterIds": option.voterIds
+                ]
+            },
+            "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000),
+            "status": status,
+            "comments": comments.map { $0.firestoreData }
+        ]
+    }
+
     init?(document: QueryDocumentSnapshot) {
         let data = document.data()
         guard let title = data["title"] as? String else { return nil }

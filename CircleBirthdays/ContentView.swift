@@ -11,6 +11,8 @@ import CoreLocation
 import UIKit
 import AVKit
 import UniformTypeIdentifiers
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 private func localized(_ english: String, language: AppLanguage) -> String {
     guard language == .hindi else { return english }
@@ -115,10 +117,86 @@ private func localized(_ english: String, language: AppLanguage) -> String {
         "No audio selected": "कोई ऑडियो नहीं चुना गया",
         "Audio selected": "ऑडियो चुना गया",
         "Voice Memory": "वॉइस मेमोरी",
-        "Playing voice memory...": "वॉइस मेमोरी चल रही है..."
+        "Playing voice memory...": "वॉइस मेमोरी चल रही है...",
+        "AI Assistant": "AI सहायक",
+        "Family AI Assistant": "फैमिली AI सहायक",
+        "Ask a question...": "सवाल पूछें...",
+        "AI Card Generator": "AI कार्ड जेनरेटर",
+        "Generate Card": "कार्ड बनाएं",
+        "Card Studio": "कार्ड स्टूडियो",
+        "Greeting cards": "ग्रीटिंग कार्ड",
+        "Business": "व्यवसाय",
+        "Business Directory": "व्यवसाय निर्देशिका",
+        "Local services": "स्थानीय सेवाएं",
+        "Achievements": "उपलब्धियां",
+        "Family wins": "परिवार की उपलब्धियां",
+        "Activity Log": "गतिविधि लॉग",
+        "Recent activity": "हाल की गतिविधि",
+        "Login Log": "लॉगिन लॉग",
+        "Sign-in history": "साइन-इन इतिहास",
+        "Explore": "एक्सप्लोर करें",
+        "Emergency": "आपातकाल",
+        "Primary": "प्राथमिक",
+        "My Branch": "मेरी शाखा"
     ]
 
     return hindiMap[english] ?? english
+}
+
+private func openWhatsAppInvite(for member: Member, language: AppLanguage) {
+    let message: String
+    if language == .hindi {
+        message = """
+        पुरावले - हम और हमारे
+
+        नमस्ते \(member.name)! आपको हमारे विशेष समुदाय ऐप में शामिल होने के लिए आमंत्रित किया गया है।
+
+        Android App: https://play.google.com/store/apps/details?id=com.purawale.app
+        Web Access: https://circlebirthdays.web.app/
+
+        कृपया अपनी Email ID या Phone Number के साथ उत्तर दें ताकि हम आपका लॉगिन बना सकें और आपको एक्सेस दे सकें!
+        """
+    } else {
+        message = """
+        Purawale - Hum aur Humare
+
+        Hello \(member.name)! You're invited to join our exclusive community app.
+
+        Android App: https://play.google.com/store/apps/details?id=com.purawale.app
+        Web Access: https://circlebirthdays.web.app/
+
+        Please reply with your Email ID or Phone Number so we can create your login and give you access!
+        """
+    }
+
+    let encodedMessage = message.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+    let digits = member.phoneNumber.filter(\.isNumber)
+    let phone = digits.count == 10 ? "91\(digits)" : digits
+    let urlString = phone.isEmpty
+        ? "https://wa.me/?text=\(encodedMessage)"
+        : "https://wa.me/\(phone)?text=\(encodedMessage)"
+
+    guard let url = URL(string: urlString) else { return }
+    UIApplication.shared.open(url)
+}
+
+private func profileDisplayCase(_ value: String?) -> String? {
+    guard let value else { return nil }
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+
+    return trimmed
+        .split(separator: " ", omittingEmptySubsequences: false)
+        .map { word in
+            word
+                .split(separator: "-", omittingEmptySubsequences: false)
+                .map { part in
+                    guard let first = part.first else { return "" }
+                    return first.uppercased() + part.dropFirst().lowercased()
+                }
+                .joined(separator: "-")
+        }
+        .joined(separator: " ")
 }
 
 private func adaptiveHorizontalPadding(for width: CGFloat) -> CGFloat {
@@ -163,11 +241,45 @@ private func completedYears(since value: String?) -> Int? {
     return Calendar.current.dateComponents([.year], from: date, to: .now).year
 }
 
+private func ordinalSuffix(_ value: Int) -> String {
+    let mod100 = value % 100
+    if (11...13).contains(mod100) {
+        return "th"
+    }
+
+    switch value % 10 {
+    case 1:
+        return "st"
+    case 2:
+        return "nd"
+    case 3:
+        return "rd"
+    default:
+        return "th"
+    }
+}
+
 private func loginDisplayDate(_ millis: Int64?) -> String? {
     guard let millis else { return nil }
     let formatter = DateFormatter()
     formatter.dateFormat = "dd MMM, hh:mm a"
     return formatter.string(from: Date(timeIntervalSince1970: TimeInterval(millis) / 1000.0))
+}
+
+private func imageData(fromStoredPhoto value: String?) -> Data? {
+    guard let value, value.hasPrefix("data:image") else { return nil }
+    let parts = value.components(separatedBy: "base64,")
+    guard parts.count == 2 else { return nil }
+    return Data(base64Encoded: parts[1])
+}
+
+private func imageURL(fromStoredPhoto value: String?) -> URL? {
+    guard let value, !value.hasPrefix("data:image") else { return nil }
+    return URL(string: value)
+}
+
+private func storedPhotoString(from imageData: Data) -> String {
+    "data:image/jpeg;base64,\(imageData.base64EncodedString())"
 }
 
 struct ContentView: View {
@@ -216,11 +328,38 @@ struct ContentView: View {
                         FamilyGameSessionScreen(viewModel: viewModel, sessionID: sessionID)
                     case .notifications:
                         NotificationCenterScreen(viewModel: viewModel)
+                    case let .aiCardGenerator(memberID, eventType):
+                        if let member = viewModel.member(for: memberID) {
+                            AICardGeneratorScreen(viewModel: viewModel, member: member, eventType: eventType)
+                        } else {
+                            PlaceholderFeatureScreen(
+                                viewModel: viewModel,
+                                title: localized("AI Card Generator", language: viewModel.language),
+                                systemImage: "sparkles.rectangle.stack.fill",
+                                message: "Member profile could not be found."
+                            )
+                        }
+                    case .businessDirectory:
+                        BusinessDirectoryScreen(viewModel: viewModel)
+                    case .emergency:
+                        EmergencyScreen(viewModel: viewModel)
+                    case .achievements:
+                        AchievementsScreen(viewModel: viewModel)
+                    case .activityLog:
+                        ActivityLogScreen(viewModel: viewModel)
+                    case .loginLog:
+                        LoginLogScreen(viewModel: viewModel)
                     }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
+            if viewModel.currentUser != nil, viewModel.currentScreen != .login, !viewModel.currentScreen.isGameScreen {
+                FamilyAIAssistant(viewModel: viewModel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .padding(.leading, 14)
+                    .padding(.bottom, 14)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
         .task {
@@ -245,34 +384,87 @@ struct ContentView: View {
     }
 }
 
+private extension AppScreen {
+    var isGameScreen: Bool {
+        switch self {
+        case .familyGames, .gameLobby, .gameSession:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+private enum AppBackgroundTreatment {
+    case light
+    case androidTint
+    case flatDashboard
+}
+
 private struct AppBackground<Content: View>: View {
+    let treatment: AppBackgroundTreatment
     @ViewBuilder let content: Content
 
-    init(@ViewBuilder content: () -> Content) {
+    init(treatment: AppBackgroundTreatment = .androidTint, @ViewBuilder content: () -> Content) {
+        self.treatment = treatment
         self.content = content()
     }
 
     var body: some View {
         ZStack {
+            Color.black
+                .ignoresSafeArea()
+
             Image("Background")
                 .resizable()
                 .scaledToFill()
-                .opacity(0.88)
+                .opacity(backgroundImageOpacity)
                 .ignoresSafeArea()
 
-            LinearGradient(
-                colors: [
-                    AndroidLook.lightGolden.opacity(0.16),
-                    AndroidLook.cream.opacity(0.08),
-                    AndroidLook.lightGolden.opacity(0.12)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            if treatment == .flatDashboard {
+                Color(red: 0xF6 / 255.0, green: 0xF3 / 255.0, blue: 0xEC / 255.0)
+                    .opacity(0.28)
+                    .ignoresSafeArea()
+            }
+
+            if treatment == .light {
+                LinearGradient(
+                    colors: [
+                        AndroidLook.lightGolden.opacity(0.16),
+                        AndroidLook.cream.opacity(0.08),
+                        AndroidLook.lightGolden.opacity(0.12)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            } else if treatment == .androidTint {
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.84),
+                        AndroidLook.deepBrown.opacity(0.76),
+                        Color.black.opacity(0.88)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+            }
 
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .background(Color.clear)
+        }
+    }
+
+    private var backgroundImageOpacity: Double {
+        switch treatment {
+        case .light:
+            return 0.88
+        case .androidTint:
+            return 0.96
+        case .flatDashboard:
+            return 0.82
         }
     }
 }
@@ -283,7 +475,7 @@ private struct LoginScreen: View {
     @State private var password = ""
 
     var body: some View {
-        AppBackground {
+        AppBackground(treatment: .light) {
             GeometryReader { proxy in
                 let horizontalInset = max(16.0, proxy.size.width * 0.06)
                 let cardWidth = min(proxy.size.width - horizontalInset * 2, 300)
@@ -440,19 +632,28 @@ private struct DashboardScreen: View {
 
     var body: some View {
         if let user = viewModel.currentUser {
-            AppBackground {
-                GeometryReader { proxy in
+            AppBackground(treatment: .flatDashboard) {
+                ZStack {
+                    GeometryReader { proxy in
                     let safeHorizontalInset = proxy.safeAreaInsets.leading + proxy.safeAreaInsets.trailing
                     let horizontalInset = adaptiveHorizontalPadding(for: proxy.size.width)
                     let contentWidth = max(0.0, proxy.size.width - safeHorizontalInset - horizontalInset * 2.0)
                     let cardSpacing = max(10.0, min(14.0, proxy.size.width * 0.03))
                     let layoutScale = max(0.88, min(1.08, proxy.size.width / 390.0))
                     let statMinWidth = max(88.0, min(128.0, floor((contentWidth - (cardSpacing * 2.0)) / 3.0)))
-                    let actionTileWidth = max(88.0, floor((contentWidth - cardSpacing * 2.0) / 3.0))
+                    let actionTileWidth = max(132.0, floor((contentWidth - cardSpacing) / 2.0))
 
                     NavigationStack {
                         ScrollView {
                             VStack(alignment: .leading, spacing: max(16.0, 18.0 * layoutScale)) {
+                                dashboardAndroidTopBar(
+                                    viewModel: viewModel,
+                                    layoutScale: layoutScale,
+                                    onChangePassword: {
+                                        isPasswordDialogPresented = true
+                                    }
+                                )
+
                                 dashboardHeroCard(
                                     for: user,
                                     language: viewModel.language,
@@ -462,20 +663,14 @@ private struct DashboardScreen: View {
                                     onEditProfile: { editingSelf = user }
                                 )
 
-                                dashboardAccountActions(
-                                    viewModel: viewModel,
-                                    layoutScale: layoutScale,
-                                    onChangePassword: {
-                                        isPasswordDialogPresented = true
-                                    }
-                                )
-
                                 LazyVGrid(columns: [
                                     GridItem(.adaptive(minimum: statMinWidth), spacing: cardSpacing)
                                 ], spacing: cardSpacing) {
-                                    StatTile(title: localized("Members", language: viewModel.language), value: "\(viewModel.activeMembers.count)", layoutScale: layoutScale)
+                                    StatTile(title: localized("Members", language: viewModel.language), value: "\(viewModel.dashboardActiveMembers.count)", layoutScale: layoutScale)
                                     StatTile(title: localized("Today", language: viewModel.language), value: "\(viewModel.todayEvents.count)", layoutScale: layoutScale)
-                                    StatTile(title: localized("Pending", language: viewModel.language), value: "\(viewModel.pendingCount)", layoutScale: layoutScale)
+                                    if viewModel.hasAdminPrivileges && viewModel.pendingCount > 0 {
+                                        StatTile(title: localized("Pending", language: viewModel.language), value: "\(viewModel.pendingCount)", layoutScale: layoutScale)
+                                    }
                                 }
 
                                 dashboardQuickActions(
@@ -490,9 +685,16 @@ private struct DashboardScreen: View {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Text(localized("Events Today", language: viewModel.language))
                                             .font(.headline)
+                                            .foregroundStyle(AndroidLook.deepBrown)
 
                                         ForEach(viewModel.todayEvents.prefix(5)) { event in
-                                            FamilyEventRow(event: event, language: viewModel.language)
+                                            FamilyEventRow(
+                                                event: event,
+                                                language: viewModel.language,
+                                                onGenerateCard: {
+                                                    viewModel.showAICardGenerator(for: event.member, eventType: event.type)
+                                                }
+                                            )
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                         }
                                     }
@@ -502,9 +704,16 @@ private struct DashboardScreen: View {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Text(localized("Upcoming Events (7 Days)", language: viewModel.language))
                                             .font(.headline)
+                                            .foregroundStyle(AndroidLook.deepBrown)
 
                                         ForEach(viewModel.upcomingEvents.prefix(5)) { event in
-                                            FamilyEventRow(event: event, language: viewModel.language)
+                                            FamilyEventRow(
+                                                event: event,
+                                                language: viewModel.language,
+                                                onGenerateCard: {
+                                                    viewModel.showAICardGenerator(for: event.member, eventType: event.type)
+                                                }
+                                            )
                                                 .frame(maxWidth: .infinity, alignment: .leading)
                                         }
                                     }
@@ -515,41 +724,7 @@ private struct DashboardScreen: View {
                             .padding(.vertical, 14)
                             .frame(maxWidth: .infinity, alignment: .center)
                         }
-                        .navigationTitle(localized("Dashboard", language: viewModel.language))
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .topBarLeading) {
-                                Button {
-                                    viewModel.logout()
-                                } label: {
-                                    Label(localized("Logout", language: viewModel.language), systemImage: "rectangle.portrait.and.arrow.right")
-                                }
-                            }
-                            ToolbarItemGroup(placement: .topBarTrailing) {
-                                Button {
-                                    viewModel.showNotifications()
-                                } label: {
-                                    ZStack(alignment: .topTrailing) {
-                                        Image(systemName: "bell.fill")
-                                        if viewModel.unreadNotificationCount > 0 {
-                                            Text("\(min(viewModel.unreadNotificationCount, 99))")
-                                                .font(.system(size: 9, weight: .bold))
-                                                .foregroundStyle(.white)
-                                                .padding(.horizontal, 4)
-                                                .padding(.vertical, 2)
-                                                .background(.red, in: Capsule())
-                                                .offset(x: 8, y: -8)
-                                        }
-                                    }
-                                }
-
-                                Button {
-                                    isPasswordDialogPresented = true
-                                } label: {
-                                    Image(systemName: "key.fill")
-                                }
-                            }
-                        }
+                        .toolbar(.hidden, for: .navigationBar)
                         .sheet(isPresented: $isPasswordDialogPresented) {
                             ChangePasswordSheet(
                                 language: viewModel.language,
@@ -580,7 +755,7 @@ private struct DashboardScreen: View {
                         .sheet(item: $editingSelf) { member in
                             MemberEditScreen(
                                 originalMember: member,
-                                canApproveDirectly: viewModel.currentUser?.isAdmin == true || viewModel.currentUser?.isEditor == true,
+                                canSaveDirectly: viewModel.savesMemberEditsDirectly(member),
                                 language: viewModel.language,
                                 onSave: { updatedMember in
                                     Task {
@@ -599,6 +774,7 @@ private struct DashboardScreen: View {
                                 }
                             )
                         }
+                    }
                     }
                 }
             }
@@ -638,21 +814,28 @@ private struct ProfilesScreen: View {
                         .buttonStyle(.plain)
                     }
 
-                if viewModel.currentUser?.isAdmin == true && !viewModel.pendingMembers.isEmpty {
+                if viewModel.hasAdminPrivileges && !viewModel.pendingMembers.isEmpty {
                     Section(localized("Pending Approvals", language: viewModel.language)) {
                         ForEach(viewModel.resolvedPendingMembers) { member in
                             MemberListRow(
                                 member: member,
                                 showsPendingBadge: true,
                                 canEdit: viewModel.canEdit(member),
+                                canChat: false,
+                                canAdminManage: false,
                                 onEdit: { editingMember = member },
-                                onView: { viewingMember = member }
+                                onView: { viewingMember = member },
+                                onChat: {},
+                                onResetPassword: {},
+                                onRemovePhoto: {},
+                                onRemoveMember: {},
+                                onInviteWhatsApp: {}
                             )
                         }
                     }
                 }
 
-                if viewModel.currentUser?.isAdmin == true && !viewModel.relationshipOverrides.isEmpty {
+                if viewModel.hasAdminPrivileges && !viewModel.relationshipOverrides.isEmpty {
                     Section(localized("Relationship Requests", language: viewModel.language)) {
                         ForEach(viewModel.relationshipOverrides) { override in
                             RelationshipOverrideRow(
@@ -667,7 +850,7 @@ private struct ProfilesScreen: View {
                     }
                 }
 
-                if viewModel.currentUser?.isAdmin == true && !viewModel.deletionRequests.isEmpty {
+                if viewModel.hasAdminPrivileges && !viewModel.deletionRequests.isEmpty {
                     Section(localized("Deletion Requests", language: viewModel.language)) {
                         ForEach(viewModel.deletionRequests) { request in
                             DeletionRequestRow(
@@ -693,8 +876,23 @@ private struct ProfilesScreen: View {
                             member: member,
                             showsPendingBadge: false,
                             canEdit: viewModel.canEdit(member),
+                            canChat: viewModel.currentUser?.id != member.id,
+                            canAdminManage: viewModel.hasAdminPrivileges,
                             onEdit: { editingMember = member },
-                            onView: { viewingMember = member }
+                            onView: { viewingMember = member },
+                            onChat: { viewModel.startChat(with: member) },
+                            onResetPassword: {
+                                Task { await viewModel.resetPassword(for: member) }
+                            },
+                            onRemovePhoto: {
+                                Task { await viewModel.removePhoto(for: member) }
+                            },
+                            onRemoveMember: {
+                                Task { await viewModel.removeMember(member) }
+                            },
+                            onInviteWhatsApp: {
+                                openWhatsAppInvite(for: member, language: viewModel.language)
+                            }
                         )
                     }
                 }
@@ -725,7 +923,7 @@ private struct ProfilesScreen: View {
                 .sheet(item: $editingMember) { member in
                     MemberEditScreen(
                         originalMember: member,
-                        canApproveDirectly: viewModel.currentUser?.isAdmin == true || viewModel.currentUser?.isEditor == true,
+                        canSaveDirectly: viewModel.savesMemberEditsDirectly(member),
                         language: viewModel.language,
                         onSave: { updatedMember in
                             Task {
@@ -1023,6 +1221,7 @@ private struct GalleryScreen: View {
 
 private struct DiscussionsScreen: View {
     @Bindable var viewModel: AppViewModel
+    @State private var showEditor = false
     @State private var pendingDeletionRequest: PendingDeletionRequest?
 
     var body: some View {
@@ -1065,6 +1264,30 @@ private struct DiscussionsScreen: View {
                             Label(localized("Home", language: viewModel.language), systemImage: "house")
                         }
                     }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showEditor = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("New")
+                    }
+                }
+                .sheet(isPresented: $showEditor) {
+                    DiscussionEditorSheet(
+                        viewModel: viewModel,
+                        authorId: viewModel.currentUser?.id ?? "",
+                        authorName: viewModel.currentUser?.name ?? "",
+                        onSave: { discussion in
+                            Task {
+                                await viewModel.saveDiscussion(discussion)
+                            }
+                            showEditor = false
+                        },
+                        onCancel: {
+                            showEditor = false
+                        }
+                    )
                 }
                 .sheet(item: $pendingDeletionRequest) { request in
                     DeletionRequestSheet(
@@ -1144,10 +1367,13 @@ private struct CookbookScreen: View {
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Add") {
+                        Button {
                             editingRecipe = nil
                             showEditor = true
+                        } label: {
+                            Image(systemName: "plus")
                         }
+                        .accessibilityLabel("Add")
                     }
                 }
                 .sheet(isPresented: $showEditor) {
@@ -1228,10 +1454,13 @@ private struct TraditionsScreen: View {
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Add") {
+                        Button {
                             editingTradition = nil
                             showEditor = true
+                        } label: {
+                            Image(systemName: "plus")
                         }
+                        .accessibilityLabel("Add")
                     }
                 }
                 .sheet(isPresented: $showEditor) {
@@ -1259,6 +1488,169 @@ private struct TraditionsScreen: View {
     }
 }
 
+private enum MemoryLaneTrack: String, CaseIterable, Identifiable {
+    case family = "GLOBAL"
+    case privateFamily = "PRIVATE_FAMILY"
+    case oldIsGold = "OLD_IS_GOLD"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .family:
+            return "Family Track"
+        case .privateFamily:
+            return "Private Family"
+        case .oldIsGold:
+            return "Old Is Gold"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .family:
+            return "Shared with the full community"
+        case .privateFamily:
+            return "Shared inside a selected family context"
+        case .oldIsGold:
+            return "Legacy memories and archival stories"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .family:
+            return "person.3.fill"
+        case .privateFamily:
+            return "lock.shield.fill"
+        case .oldIsGold:
+            return "sparkles"
+        }
+    }
+
+    var tint: Color {
+        switch self {
+        case .family:
+            return .teal
+        case .privateFamily:
+            return .indigo
+        case .oldIsGold:
+            return .orange
+        }
+    }
+
+    func contains(_ milestone: Milestone) -> Bool {
+        let normalized = milestone.visibilityType.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        switch self {
+        case .family:
+            return normalized.isEmpty || normalized == rawValue
+        case .privateFamily, .oldIsGold:
+            return normalized == rawValue
+        }
+    }
+}
+
+private struct MemoryLaneTrackSection: View {
+    let track: MemoryLaneTrack
+    let milestones: [Milestone]
+    let language: AppLanguage
+    let contentWidth: CGFloat
+    let onEdit: (Milestone) -> Void
+    let onDelete: (Milestone) -> Void
+    let onSelect: (Milestone) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: track.icon)
+                    .font(.headline)
+                    .foregroundStyle(track.tint)
+                    .frame(width: 34, height: 34)
+                    .background(track.tint.opacity(0.14), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(track.title)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(.primary)
+                    Text(track.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("\(milestones.count)")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(track.tint)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(track.tint.opacity(0.12), in: Capsule())
+            }
+
+            if milestones.isEmpty {
+                Text("No memories in this track yet.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(milestones) { milestone in
+                    MilestoneCard(
+                        milestone: milestone,
+                        language: language,
+                        contentWidth: max(0.0, contentWidth - 24),
+                        onEdit: {
+                            onEdit(milestone)
+                        },
+                        onDelete: {
+                            onDelete(milestone)
+                        }
+                    )
+                    .overlay(alignment: .topTrailing) {
+                        MemoryLaneSharingBadge(milestone: milestone, track: track)
+                            .padding(10)
+                    }
+                    .onTapGesture {
+                        onSelect(milestone)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: contentWidth, alignment: .leading)
+        .background(Color.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(track.tint.opacity(0.20), lineWidth: 1)
+        )
+    }
+}
+
+private struct MemoryLaneSharingBadge: View {
+    let milestone: Milestone
+    let track: MemoryLaneTrack
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: track.icon)
+            Text(label)
+        }
+        .font(.caption2.weight(.bold))
+        .foregroundStyle(track.tint)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.90), in: Capsule())
+    }
+
+    private var label: String {
+        let familyContext = milestone.familyContextId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !familyContext.isEmpty {
+            return familyContext
+        }
+        return track.rawValue.replacingOccurrences(of: "_", with: " ")
+    }
+}
+
 private struct MemoryLaneScreen: View {
     @Bindable var viewModel: AppViewModel
     @State private var showEditor = false
@@ -1274,26 +1666,26 @@ private struct MemoryLaneScreen: View {
                     let contentWidth = max(0.0, proxy.size.width - safeHorizontalInset - horizontalInset * 2.0)
 
                     ScrollView {
-                        LazyVStack(spacing: 14) {
-                            ForEach(viewModel.visibleMilestones) { milestone in
-                                MilestoneCard(
-                                    milestone: milestone,
+                        LazyVStack(spacing: 16) {
+                            ForEach(MemoryLaneTrack.allCases) { track in
+                                MemoryLaneTrackSection(
+                                    track: track,
+                                    milestones: viewModel.visibleMilestones.filter { track.contains($0) },
                                     language: viewModel.language,
                                     contentWidth: contentWidth,
-                                    onEdit: {
+                                    onEdit: { milestone in
                                         editingMilestone = milestone
                                         showEditor = true
                                     },
-                                    onDelete: {
+                                    onDelete: { milestone in
                                         Task {
                                             await viewModel.deleteMilestone(milestone)
                                         }
+                                    },
+                                    onSelect: { milestone in
+                                        selectedMilestone = milestone
                                     }
                                 )
-                                .frame(width: contentWidth, alignment: .leading)
-                                .onTapGesture {
-                                    selectedMilestone = milestone
-                                }
                             }
                         }
                         .frame(width: contentWidth, alignment: .leading)
@@ -1313,10 +1705,13 @@ private struct MemoryLaneScreen: View {
                         }
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Add") {
+                        Button {
                             editingMilestone = nil
                             showEditor = true
+                        } label: {
+                            Image(systemName: "plus")
                         }
+                        .accessibilityLabel("Add")
                     }
                 }
                 .sheet(isPresented: $showEditor) {
@@ -1409,6 +1804,136 @@ private struct MessagesScreen: View {
 }
 
 @ViewBuilder
+private func dashboardAndroidTopBar(
+    viewModel: AppViewModel,
+    layoutScale: CGFloat,
+    onChangePassword: @escaping () -> Void
+) -> some View {
+    HStack(alignment: .center, spacing: 10) {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Purawale Hum aur Humare")
+                .font(.system(size: max(19.0, 22.0 * layoutScale), weight: .bold))
+                .foregroundStyle(AndroidLook.deepBrown)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+            Text("Nema Sub- Community")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(AndroidLook.accentGold)
+        }
+        .layoutPriority(1)
+
+        Spacer(minLength: 4)
+
+        if viewModel.canSwitchTreeView {
+            BranchSwitch(
+                isBranchView: viewModel.currentTreeId != "primary",
+                language: viewModel.language,
+                onToggle: { useBranch in
+                    viewModel.switchTree(useBranch ? (viewModel.currentUser?.id ?? "primary") : "primary")
+                }
+            )
+        }
+
+        DashboardTopIconButton(
+            systemImage: "bell.fill",
+            badge: viewModel.unreadNotificationCount,
+            action: viewModel.showNotifications
+        )
+
+        DashboardTopIconButton(
+            systemImage: "key.fill",
+            action: onChangePassword
+        )
+
+        DashboardTopIconButton(
+            systemImage: "rectangle.portrait.and.arrow.right",
+            action: viewModel.logout
+        )
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 14)
+    .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .overlay(
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .stroke(Color.black.opacity(0.08), lineWidth: 1)
+    )
+}
+
+private struct BranchSwitch: View {
+    let isBranchView: Bool
+    let language: AppLanguage
+    let onToggle: (Bool) -> Void
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text("P")
+                .fontWeight(isBranchView ? .bold : .heavy)
+                .foregroundStyle(isBranchView ? AndroidLook.mutedBrown : AndroidLook.deepBrown)
+
+            Toggle("", isOn: Binding(get: { isBranchView }, set: onToggle))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .scaleEffect(0.72)
+                .tint(AndroidLook.accentGold)
+                .frame(width: 42)
+
+            Text("B")
+                .fontWeight(isBranchView ? .heavy : .bold)
+                .foregroundStyle(isBranchView ? AndroidLook.deepBrown : AndroidLook.mutedBrown)
+        }
+        .font(.caption2)
+        .padding(.leading, 9)
+        .padding(.trailing, 7)
+        .padding(.vertical, 5)
+        .background(AndroidLook.lightGolden.opacity(0.30), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .accessibilityLabel(isBranchView ? localized("My Branch", language: language) : localized("Primary", language: language))
+    }
+}
+
+private struct DashboardTopIconButton: View {
+    let systemImage: String
+    var badge: Int = 0
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: systemImage)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AndroidLook.deepBrown)
+                    .frame(width: 30, height: 30)
+
+                if badge > 0 {
+                    Text("\(min(badge, 99))")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.red, in: Capsule())
+                        .offset(x: 7, y: -4)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct AndroidDashboardSectionHeader: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(AndroidLook.accentGold)
+                .frame(width: 10, height: 10)
+            Text(title)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(AndroidLook.deepBrown)
+        }
+    }
+}
+
+@ViewBuilder
 private func dashboardHeroCard(
     for user: Member,
     language: AppLanguage,
@@ -1423,7 +1948,6 @@ private func dashboardHeroCard(
         let birthday = shortDisplayDate(user.dateOfBirth)
         let birthdayAge = completedYears(since: user.dateOfBirth)
         let marriage = shortDisplayDate(user.marriageDate)
-        let marriageYears = completedYears(since: user.marriageDate)
 
         VStack(alignment: .leading, spacing: max(12.0, 14.0 * layoutScale)) {
             HStack(alignment: .center, spacing: max(16.0, 20.0 * layoutScale)) {
@@ -1438,13 +1962,13 @@ private func dashboardHeroCard(
                         .minimumScaleFactor(0.85)
                     Text(user.phoneNumber)
                         .font(.system(size: subtitleFontSize, weight: .bold, design: .default))
-                        .foregroundStyle(AndroidLook.softBrown)
+                        .foregroundStyle(AndroidLook.mutedBrown)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
                     if user.isAdmin, let lastLogin = loginDisplayDate(user.lastLoggedIn) {
                         Text("Last Login: \(lastLogin)")
                             .font(.caption2.weight(.bold))
-                            .foregroundStyle(AndroidLook.mutedBrown)
+                            .foregroundStyle(AndroidLook.accentGold.opacity(0.86))
                     }
                     if let location = user.location?.trimmingCharacters(in: .whitespacesAndNewlines), !location.isEmpty {
                         Label(location, systemImage: "location.fill")
@@ -1463,10 +1987,10 @@ private func dashboardHeroCard(
                     if let relationship = user.relationship {
                         Text(relationship)
                             .font(.caption.weight(.semibold))
-                            .foregroundStyle(AndroidLook.softBrown)
+                            .foregroundStyle(AndroidLook.deepBrown)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 5)
-                            .background(AndroidLook.lightGolden.opacity(0.52), in: Capsule())
+                            .background(AndroidLook.accentGold.opacity(0.22), in: Capsule())
                     }
                 }
 
@@ -1478,19 +2002,19 @@ private func dashboardHeroCard(
                             .frame(width: 34, height: 34)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(AndroidLook.softBrown)
+                    .foregroundStyle(AndroidLook.deepBrown)
 
                     Button(action: onEditProfile) {
                         Image(systemName: "square.and.pencil")
                             .frame(width: 34, height: 34)
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(AndroidLook.softBrown)
+                    .foregroundStyle(AndroidLook.deepBrown)
                 }
             }
 
             Divider()
-                .background(AndroidLook.cream)
+                .background(Color.black.opacity(0.10))
 
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
@@ -1510,7 +2034,7 @@ private func dashboardHeroCard(
                         Text(localized("Anniversary", language: language))
                             .font(.caption.weight(.bold))
                             .foregroundStyle(AndroidLook.mutedBrown)
-                        Text("\(marriage)\((marriageYears ?? 0) > 0 ? " (Age \(marriageYears ?? 0))" : "")")
+                        Text(marriage)
                             .font(.subheadline.weight(.heavy))
                             .foregroundStyle(AndroidLook.deepBrown)
                             .lineLimit(1)
@@ -1522,10 +2046,10 @@ private func dashboardHeroCard(
         }
         .padding(max(18.0, 20.0 * layoutScale))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.72), in: RoundedRectangle(cornerRadius: max(24.0, 28.0 * layoutScale), style: .continuous))
+        .background(Color.white, in: RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: max(24.0, 28.0 * layoutScale), style: .continuous)
-                .stroke(AndroidLook.softBrown, lineWidth: 2)
+            RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 
@@ -1608,12 +2132,10 @@ private func dashboardQuickActions(
     layoutScale: CGFloat
 ) -> some View {
         let tilePadding = max(10.0, 12.0 * layoutScale)
-        let columns = Array(repeating: GridItem(.flexible(minimum: 0, maximum: actionTileWidth), spacing: cardSpacing), count: 3)
+        let columns = Array(repeating: GridItem(.flexible(minimum: 0, maximum: actionTileWidth), spacing: cardSpacing), count: 2)
 
         VStack(alignment: .leading, spacing: max(10.0, 12.0 * layoutScale)) {
-            Text(localized("Quick Actions", language: viewModel.language))
-                .font(.headline)
-                .foregroundStyle(AndroidLook.deepBrown)
+            AndroidDashboardSectionHeader(title: localized("Explore", language: viewModel.language))
 
             LazyVGrid(columns: columns, spacing: cardSpacing) {
                 Button {
@@ -1631,7 +2153,7 @@ private func dashboardQuickActions(
                 }
                 .buttonStyle(.plain)
 
-                if viewModel.currentUser?.isAdmin == true {
+                if viewModel.hasAdminPrivileges && viewModel.pendingCount > 0 {
                     Button {
                         viewModel.showProfiles()
                     } label: {
@@ -1754,6 +2276,66 @@ private func dashboardQuickActions(
                 .buttonStyle(.plain)
 
                 Button {
+                    viewModel.showEmergency()
+                } label: {
+                    DashboardActionLabel(
+                        title: localized("Emergency", language: viewModel.language),
+                        subtitle: "Family contacts",
+                        systemImage: "cross.case.fill",
+                        tint: Color(red: 0.90, green: 0.10, blue: 0.12),
+                        background: LinearGradient(colors: [Color.red.opacity(0.28), Color.orange.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                        layoutScale: layoutScale,
+                        tilePadding: tilePadding
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    viewModel.showNearestAICardGenerator()
+                } label: {
+                    DashboardActionLabel(
+                        title: localized("Card Studio", language: viewModel.language),
+                        subtitle: localized("Greeting cards", language: viewModel.language),
+                        systemImage: "sparkles.rectangle.stack.fill",
+                        tint: AndroidLook.softBrown,
+                        background: LinearGradient(colors: [Color.yellow.opacity(0.28), Color.pink.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                        layoutScale: layoutScale,
+                        tilePadding: tilePadding
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    viewModel.showAchievements()
+                } label: {
+                    DashboardActionLabel(
+                        title: localized("Achievements", language: viewModel.language),
+                        subtitle: localized("Family wins", language: viewModel.language),
+                        systemImage: "trophy.fill",
+                        tint: AndroidLook.softBrown,
+                        background: LinearGradient(colors: [Color.yellow.opacity(0.24), Color.orange.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                        layoutScale: layoutScale,
+                        tilePadding: tilePadding
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    viewModel.showBusinessDirectory()
+                } label: {
+                    DashboardActionLabel(
+                        title: localized("Business", language: viewModel.language),
+                        subtitle: localized("Local services", language: viewModel.language),
+                        systemImage: "building.2.fill",
+                        tint: AndroidLook.softBrown,
+                        background: LinearGradient(colors: [Color.gray.opacity(0.22), Color.blue.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                        layoutScale: layoutScale,
+                        tilePadding: tilePadding
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Button {
                     viewModel.showFamilyGames()
                 } label: {
                     DashboardActionLabel(
@@ -1782,6 +2364,38 @@ private func dashboardQuickActions(
                     )
                 }
                 .buttonStyle(.plain)
+
+                if viewModel.isPrimaryAdminLogin {
+                    Button {
+                        viewModel.showActivityLog()
+                    } label: {
+                        DashboardActionLabel(
+                            title: localized("Activity Log", language: viewModel.language),
+                            subtitle: localized("Recent activity", language: viewModel.language),
+                            systemImage: "clock.badge.checkmark.fill",
+                            tint: AndroidLook.softBrown,
+                            background: LinearGradient(colors: [Color.teal.opacity(0.24), Color.cyan.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                            layoutScale: layoutScale,
+                            tilePadding: tilePadding
+                        )
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        viewModel.showLoginLog()
+                    } label: {
+                        DashboardActionLabel(
+                            title: localized("Login Log", language: viewModel.language),
+                            subtitle: localized("Sign-in history", language: viewModel.language),
+                            systemImage: "person.badge.clock.fill",
+                            tint: AndroidLook.softBrown,
+                            background: LinearGradient(colors: [Color.indigo.opacity(0.22), Color.mint.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing),
+                            layoutScale: layoutScale,
+                            tilePadding: tilePadding
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .frame(maxWidth: contentWidth, alignment: .center)
         }
@@ -1895,7 +2509,11 @@ private struct CalendarScreen: View {
         }
         .buttonStyle(.bordered)
         .padding(8)
-        .background(.white.opacity(0.88), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
     }
 
     private var weekdayHeader: some View {
@@ -1944,14 +2562,14 @@ private struct CalendarScreen: View {
             .padding(.top, 6)
             .frame(maxWidth: .infinity)
             .aspectRatio(0.82, contentMode: .fit)
-            .foregroundStyle(isSelected ? .white : Color.brown.opacity(isCurrentMonth ? 1 : 0.35))
+            .foregroundStyle(isSelected ? .white : Color.white.opacity(isCurrentMonth ? 0.95 : 0.42))
             .background(
-                isSelected ? Color.brown : (isToday ? Color.brown.opacity(0.12) : Color.white.opacity(isCurrentMonth ? 0.88 : 0.45)),
+                isSelected ? AndroidLook.accentGold.opacity(0.82) : (isToday ? Color.white.opacity(0.20) : Color.white.opacity(isCurrentMonth ? 0.12 : 0.06)),
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isToday ? Color.brown : .clear, lineWidth: 1)
+                    .stroke(isToday ? AndroidLook.accentGold.opacity(0.85) : Color.white.opacity(0.12), lineWidth: 1)
             )
         }
         .buttonStyle(.plain)
@@ -1997,8 +2615,13 @@ private struct CalendarScreen: View {
             }
         }
         .padding(16)
-        .background(.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.08), radius: 8, x: 0, y: 4)
+        .foregroundStyle(.white)
+        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: .black.opacity(0.14), radius: 8, x: 0, y: 4)
     }
 
     private func monthStart(for date: Date) -> Date {
@@ -2212,7 +2835,15 @@ private struct ChatScreen: View {
             }
             .navigationTitle(otherMember?.name ?? localized("Chat", language: viewModel.language))
             .toolbar {
-                ToolbarItem(placement: .automatic) {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button {
+                        viewModel.showDashboard()
+                    } label: {
+                        Label(localized("Home", language: viewModel.language), systemImage: "house")
+                    }
+                }
+
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Back") {
                         viewModel.showMessages()
                     }
@@ -2226,109 +2857,127 @@ private struct MemberListRow: View {
     let member: Member
     let showsPendingBadge: Bool
     let canEdit: Bool
+    let canChat: Bool
+    let canAdminManage: Bool
     let onEdit: () -> Void
     let onView: () -> Void
+    let onChat: () -> Void
+    let onResetPassword: () -> Void
+    let onRemovePhoto: () -> Void
+    let onRemoveMember: () -> Void
+    let onInviteWhatsApp: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                AvatarView(member: member, size: 56)
+        HStack(spacing: 10) {
+            AvatarView(member: member, size: 42)
 
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(member.name)
-                            .font(.headline.weight(.bold))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-
-                        if showsPendingBadge {
-                            Text("Pending")
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.red)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.red.opacity(0.10), in: Capsule())
-                        }
-
-                        Spacer(minLength: 8)
-
-                        Button(action: canEdit ? onEdit : onView) {
-                            Image(systemName: canEdit ? "square.and.pencil" : "eye")
-                                .font(.headline)
-                                .frame(width: 38, height: 38)
-                                .background(Color.white.opacity(0.75), in: Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke((canEdit ? Color.orange : Color.blue).opacity(0.22), lineWidth: 1)
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(canEdit ? .orange : .blue)
-                    }
-
-                    Text(member.relationship?.isEmpty == false ? member.relationship! : member.phoneNumber)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(profileDisplayCase(member.name) ?? member.name)
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(AndroidLook.deepBrown)
                         .lineLimit(1)
+                        .truncationMode(.tail)
 
-                    HStack(spacing: 14) {
-                        Label(member.phoneNumber.isEmpty ? "Phone not added" : member.phoneNumber, systemImage: "phone.fill")
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-
-                        Label(birthdayLine, systemImage: "birthday.cake.fill")
-                            .labelStyle(.titleAndIcon)
-                            .lineLimit(1)
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.brown.opacity(0.90))
-
-                    if let marriageDate = member.marriageDate, !marriageDate.isEmpty {
-                        Label(Self.formatShortDate(marriageDate), systemImage: "sparkles")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text(" ")
-                            .font(.caption)
-                            .lineLimit(1)
-                            .opacity(0)
+                    if showsPendingBadge {
+                        Text("Pending")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .background(Color.red.opacity(0.10), in: Capsule())
                     }
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Text(relationText)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(AndroidLook.mutedBrown)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if canChat {
+                compactIconButton(systemImage: "message.fill", action: onChat, label: "Chat")
             }
 
-            HStack(spacing: 8) {
-                SocialLinkDot(symbol: "f.circle.fill", color: .blue, isVisible: member.facebookURL?.isEmpty == false)
-                SocialLinkDot(symbol: "camera.circle.fill", color: .pink, isVisible: member.instagramURL?.isEmpty == false)
-                SocialLinkDot(symbol: "play.circle.fill", color: .red, isVisible: member.youtubeURL?.isEmpty == false)
-                Spacer()
+            compactIconButton(systemImage: "eye.fill", action: onView, label: "View")
+
+            if canAdminManage {
+                Menu {
+                    Button {
+                        onResetPassword()
+                    } label: {
+                        Label("Reset Password", systemImage: "key.fill")
+                    }
+
+                    if member.photoURL?.isEmpty == false {
+                        Button(role: .destructive) {
+                            onRemovePhoto()
+                        } label: {
+                            Label("Remove Photo", systemImage: "photo")
+                        }
+                    }
+
+                    if canEdit {
+                        Button {
+                            onEdit()
+                        } label: {
+                            Label("Edit", systemImage: "square.and.pencil")
+                        }
+                    }
+
+                    Button {
+                        onInviteWhatsApp()
+                    } label: {
+                        Label("Invite via WhatsApp", systemImage: "paperplane.fill")
+                    }
+
+                    Button(role: .destructive) {
+                        onRemoveMember()
+                    } label: {
+                        Label("Remove Member", systemImage: "person.crop.circle.badge.minus")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle.fill")
+                        .font(.title3)
+                        .frame(width: 34, height: 34)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AndroidLook.deepBrown)
             }
-            .font(.caption)
-            .frame(height: 18)
         }
-        .frame(maxWidth: .infinity, minHeight: 168, alignment: .leading)
-        .padding(12)
-        .background(Color.white.opacity(0.88), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color.white.opacity(0.82), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.brown.opacity(0.32), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 
-    private var birthdayLine: String {
-        let date = Self.formatShortDate(member.dateOfBirth)
-        if let age = member.turnsAge() {
-            return "\(date) (Age \(age))"
+    private func compactIconButton(systemImage: String, action: @escaping () -> Void, label: String) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.subheadline.weight(.bold))
+                .frame(width: 34, height: 34)
+                .background(AndroidLook.lightGolden.opacity(0.44), in: Circle())
+                .overlay(
+                    Circle()
+                        .stroke(AndroidLook.accentGold.opacity(0.28), lineWidth: 1)
+                )
         }
-        return date
+        .buttonStyle(.plain)
+        .foregroundStyle(AndroidLook.deepBrown)
+        .accessibilityLabel(label)
     }
 
-    private static func formatShortDate(_ value: String) -> String {
-        guard let parsed = Member.isoDateFormatter.date(from: value) else { return value }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "dd MMM"
-        return formatter.string(from: parsed)
+    private var relationText: String {
+        let relationship = member.relationship?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !relationship.isEmpty {
+            return profileDisplayCase(relationship) ?? relationship
+        }
+        return member.isAdmin ? "Admin" : "Relationship not set"
     }
 }
 
@@ -3611,6 +4260,78 @@ private struct TraditionEditorSheet: View {
     }
 }
 
+private struct DiscussionEditorSheet: View {
+    @Bindable var viewModel: AppViewModel
+    let authorId: String
+    let authorName: String
+    let onSave: (DiscussionThread) -> Void
+    let onCancel: () -> Void
+
+    @State private var title = ""
+    @State private var content = ""
+    @State private var kind: DiscussionKind = .text
+    @State private var pollOptionOne = ""
+    @State private var pollOptionTwo = ""
+    @State private var pollOptionThree = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Discussion") {
+                    TextField("Title", text: $title)
+                    TextField("Message", text: $content, axis: .vertical)
+                        .lineLimit(3...8)
+                    Picker("Type", selection: $kind) {
+                        Text("Text").tag(DiscussionKind.text)
+                        Text("Image").tag(DiscussionKind.image)
+                        Text("Poll").tag(DiscussionKind.poll)
+                    }
+                }
+
+                if kind == .poll {
+                    Section("Poll Options") {
+                        TextField("Option 1", text: $pollOptionOne)
+                        TextField("Option 2", text: $pollOptionTwo)
+                        TextField("Option 3", text: $pollOptionThree)
+                    }
+                }
+            }
+            .navigationTitle("New Discussion")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Post") {
+                        onSave(
+                            DiscussionThread(
+                                id: UUID().uuidString,
+                                userId: authorId,
+                                userName: authorName,
+                                type: kind,
+                                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                                content: content.trimmingCharacters(in: .whitespacesAndNewlines),
+                                pollOptions: pollOptions,
+                                timestamp: .now,
+                                status: "APPROVED",
+                                comments: []
+                            )
+                        )
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (kind == .poll && pollOptions.count < 2))
+                }
+            }
+        }
+    }
+
+    private var pollOptions: [PollOption] {
+        [pollOptionOne, pollOptionTwo, pollOptionThree]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .map { PollOption(id: UUID().uuidString, text: $0, voterIds: []) }
+    }
+}
+
 private struct MilestoneEditorSheet: View {
     @Bindable var viewModel: AppViewModel
     let existingMilestone: Milestone?
@@ -3763,6 +4484,7 @@ private struct MilestoneEditorSheet: View {
 private struct FamilyEventRow: View {
     let event: DashboardFamilyEvent
     let language: AppLanguage
+    var onGenerateCard: (() -> Void)?
 
     private var member: Member {
         event.member
@@ -3775,7 +4497,11 @@ private struct FamilyEventRow: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.black.opacity(0.03), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
     }
 
     private var compactRow: some View {
@@ -3785,31 +4511,37 @@ private struct FamilyEventRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(member.name)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AndroidLook.deepBrown)
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
 
                 Text(eventTitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AndroidLook.mutedBrown)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
             .layoutPriority(1)
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
-            VStack(alignment: .trailing, spacing: 1) {
+            VStack(alignment: .trailing, spacing: 6) {
                 Text(daysText)
                     .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(AndroidLook.deepBrown)
                     .lineLimit(1)
                     .minimumScaleFactor(0.62)
 
                 Text(secondaryText)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AndroidLook.mutedBrown)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
+
+                if canGenerateCard, let onGenerateCard {
+                    aiCardButton(action: onGenerateCard)
+                }
             }
-            .frame(width: 76, alignment: .trailing)
+            .frame(width: 82, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -3822,6 +4554,7 @@ private struct FamilyEventRow: View {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(member.name)
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AndroidLook.deepBrown)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
 
@@ -3830,24 +4563,45 @@ private struct FamilyEventRow: View {
 
                 Text(eventTitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(AndroidLook.mutedBrown)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
 
                 HStack(spacing: 8) {
                     Text(daysText)
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AndroidLook.deepBrown)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
 
                     Text(secondaryText)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(AndroidLook.mutedBrown)
 
                     Spacer(minLength: 0)
+
+                    if canGenerateCard, let onGenerateCard {
+                        aiCardButton(action: onGenerateCard)
+                    }
                 }
             }
         }
+    }
+
+    private func aiCardButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: "sparkles")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(Color(red: 0.29, green: 0.08, blue: 0.55))
+                .frame(width: 42, height: 34)
+                .background(Color(red: 0.88, green: 0.75, blue: 0.93), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(localized("Generate Card", language: language))
+    }
+
+    private var canGenerateCard: Bool {
+        event.type == .birthday || event.type == .anniversary
     }
 
     private var daysText: String {
@@ -3877,6 +4631,1598 @@ private struct FamilyEventRow: View {
             return "\(localized("Turns", language: language)) \(age)"
         }
         return event.date.formatted(.dateTime.day().month(.abbreviated))
+    }
+}
+
+private struct FamilyAIAssistant: View {
+    @Bindable var viewModel: AppViewModel
+    @State private var isOpen = false
+    @State private var draft = ""
+    @State private var messages: [AssistantMessage] = [
+        AssistantMessage(text: "Hello! I'm your Purawale AI. Ask me anything about the family directory.", isUser: false)
+    ]
+    @State private var assistantContext = AssistantConversationContext()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if isOpen {
+                VStack(spacing: 0) {
+                    HStack {
+                        Label(localized("Family AI Assistant", language: viewModel.language), systemImage: "sparkles")
+                            .font(.subheadline.weight(.bold))
+                        Spacer()
+                        Button {
+                            isOpen = false
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption.weight(.bold))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(12)
+                    .background(AndroidLook.deepBrown)
+
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 8) {
+                                ForEach(messages) { message in
+                                    AssistantBubble(message: message)
+                                        .id(message.id)
+                                }
+                            }
+                            .padding(12)
+                        }
+                        .frame(height: 260)
+                        .onChange(of: messages.count) { _, _ in
+                            if let last = messages.last {
+                                proxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                    }
+
+                    HStack(spacing: 8) {
+                        TextField(localized("Ask a question...", language: viewModel.language), text: $draft, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(1...3)
+
+                        Button {
+                            send()
+                        } label: {
+                            Image(systemName: "paperplane.fill")
+                                .frame(width: 34, height: 34)
+                        }
+                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .buttonStyle(.borderedProminent)
+                        .tint(AndroidLook.accentGold)
+                    }
+                    .padding(10)
+                }
+                .frame(width: 340)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(Color.white.opacity(0.40), lineWidth: 1)
+                )
+                .shadow(color: .black.opacity(0.20), radius: 18, x: 0, y: 10)
+            } else {
+                Button {
+                    isOpen = true
+                } label: {
+                    Image(systemName: "sparkles")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(AndroidLook.deepBrown)
+                        .frame(width: 54, height: 54)
+                        .background(AndroidLook.accentGold, in: Circle())
+                        .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(localized("AI Assistant", language: viewModel.language))
+            }
+        }
+    }
+
+    private func send() {
+        let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        draft = ""
+        messages.append(AssistantMessage(text: question, isUser: true))
+        messages.append(AssistantMessage(text: answer(for: question), isUser: false))
+    }
+
+    private func answer(for question: String) -> String {
+        let lower = question.lowercased()
+        let members = viewModel.allResolvedMembers
+        let directMatches = findMemberMatches(question: question, members: members)
+        let selectedPendingMatch = assistantContext.matchFromPendingSelection(question)
+        let usesPreviousContext = directMatches.isEmpty && selectedPendingMatch == nil && isAssistantFollowUpQuestion(lower)
+        let matches = selectedPendingMatch.map { [$0] }
+            ?? (usesPreviousContext ? assistantContext.lastMatches : directMatches)
+
+        if isBirthdayQuestion(lower) {
+            if matches.count > 1 {
+                assistantContext.remember(matches)
+                let options = matches.map { match in
+                    let date = shortDisplayDate(match.member.dateOfBirth) ?? "birthday not saved"
+                    return "- \(match.member.name) (\(match.member.familyId)) - \(date)"
+                }
+                .joined(separator: "\n")
+                return "I found multiple matching people. Which one do you mean?\n\(options)"
+            }
+
+            guard let match = matches.first else {
+                return "Tell me the name too, and I can look up the saved birthday."
+            }
+            assistantContext.rememberResolved(match)
+            let member = match.member
+            let date = shortDisplayDate(member.dateOfBirth) ?? "not saved"
+            let prefix = assistantContextPrefix(match: match, usesPreviousContext: usesPreviousContext)
+            return "\(prefix)\(member.name)'s birthday is \(date)."
+        }
+
+        if isAnniversaryQuestion(lower) {
+            if matches.count > 1 {
+                assistantContext.remember(matches)
+                let options = matches.map { match in
+                    let date = shortDisplayDate(match.member.marriageDate) ?? "anniversary not saved"
+                    return "- \(match.member.name) (\(match.member.familyId)) - \(date)"
+                }
+                .joined(separator: "\n")
+                return "I found multiple matching people. Which one do you mean?\n\(options)"
+            }
+
+            guard let match = matches.first else {
+                return "Tell me the couple or member name, and I can check the saved anniversary."
+            }
+            assistantContext.rememberResolved(match)
+            let member = match.member
+            let date = shortDisplayDate(member.marriageDate) ?? "not saved"
+            let prefix = assistantContextPrefix(match: match, usesPreviousContext: usesPreviousContext)
+            return "\(prefix)\(member.name)'s anniversary is \(date)."
+        }
+
+        if matches.isEmpty, lower.contains("today") {
+            let names = viewModel.todayEvents.prefix(6).map { "\($0.member.name): \($0.type.rawValue)" }
+            return names.isEmpty ? "No family birthdays, anniversaries, or remembrance events are listed for today." : "Today: " + names.joined(separator: ", ")
+        }
+
+        if matches.isEmpty, lower.contains("upcoming") || lower.contains("next") {
+            let names = viewModel.upcomingEvents.prefix(6).map { "\($0.member.name) in \($0.daysUntil) days" }
+            return names.isEmpty ? "Nothing is listed in the next 7 days." : "Coming up: " + names.joined(separator: ", ")
+        }
+
+        if matches.isEmpty, lower.contains("members") || lower.contains("count") {
+            return "There are \(viewModel.activeMembers.count) approved active members, \(viewModel.pendingCount) pending profiles, and \(viewModel.visibleChannels.count) chat threads visible to you."
+        }
+
+        if matches.count > 1 {
+            assistantContext.remember(matches)
+            let options = matches.map { "- \($0.member.name) (\($0.member.familyId))" }.joined(separator: "\n")
+            return "I found multiple matching people. Which one do you mean?\n\(options)"
+        }
+
+        if let match = matches.first {
+            assistantContext.rememberResolved(match)
+            let member = match.member
+            let prefix = assistantContextPrefix(match: match, usesPreviousContext: usesPreviousContext)
+
+            if isLocationQuestion(lower) {
+                let location = member.location?.isEmpty == false ? member.location! : "not saved"
+                return "\(prefix)\(member.name)'s location is \(location)."
+            }
+
+            if isPhoneQuestion(lower) {
+                let phone = member.phoneNumber.isEmpty ? "not saved" : member.phoneNumber
+                return "\(prefix)\(member.name)'s phone number is \(phone)."
+            }
+
+            if isRelationshipQuestion(lower) {
+                let relation = member.relationship
+                    ?? viewModel.currentUser.flatMap { FamilyUtils.getRelationship(target: member, observer: $0, allMembers: members) }
+                    ?? "not saved"
+                return "\(prefix)\(member.name)'s relationship is \(relation)."
+            }
+
+            let relation = member.relationship
+                ?? viewModel.currentUser.flatMap { FamilyUtils.getRelationship(target: member, observer: $0, allMembers: members) }
+                ?? "a family member"
+            let location = member.location?.isEmpty == false ? " They are listed in \(member.location!)." : ""
+            return "\(prefix)\(member.name) is \(relation). Family ID: \(member.familyId).\(location)"
+        }
+
+        return "I can answer from the local family directory: birthdays, anniversaries, today/upcoming events, member counts, locations, and relationships. Try asking for a person's name."
+    }
+
+    private func assistantContextPrefix(match: AssistantMemberMatch, usesPreviousContext: Bool) -> String {
+        if usesPreviousContext { return "Using the previous person, \(match.member.name): " }
+        if match.isFuzzy { return "Closest match: \(match.member.name). " }
+        return ""
+    }
+}
+
+private struct AssistantMemberMatch {
+    let member: Member
+    let score: Int
+    let isFuzzy: Bool
+}
+
+private struct AssistantConversationContext {
+    var lastMatches: [AssistantMemberMatch] = []
+    var pendingMatches: [AssistantMemberMatch] = []
+
+    mutating func remember(_ matches: [AssistantMemberMatch]) {
+        lastMatches = matches
+        pendingMatches = matches
+    }
+
+    mutating func rememberResolved(_ match: AssistantMemberMatch) {
+        lastMatches = [match]
+        pendingMatches = []
+    }
+
+    func matchFromPendingSelection(_ question: String) -> AssistantMemberMatch? {
+        guard !pendingMatches.isEmpty else { return nil }
+        let normalized = question.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let index: Int?
+        if normalized.contains("first") || normalized == "1" || normalized.contains("1st") {
+            index = 0
+        } else if normalized.contains("second") || normalized == "2" || normalized.contains("2nd") {
+            index = 1
+        } else if normalized.contains("third") || normalized == "3" || normalized.contains("3rd") {
+            index = 2
+        } else if normalized.contains("fourth") || normalized == "4" || normalized.contains("4th") {
+            index = 3
+        } else if normalized.contains("fifth") || normalized == "5" || normalized.contains("5th") {
+            index = 4
+        } else {
+            index = nil
+        }
+        guard let index, pendingMatches.indices.contains(index) else { return nil }
+        return pendingMatches[index]
+    }
+}
+
+private let assistantIgnoredQuestionWords: Set<String> = [
+    "a", "an", "and", "are", "birth", "birthday", "bday", "dob", "date", "day", "of", "on", "the",
+    "is", "when", "what", "whats", "who", "whose", "tell", "me", "show", "for", "ka", "ki", "ke",
+    "hai", "kab", "kya", "please", "pls", "anniversary", "marriage", "wedding", "shaadi", "vivah",
+    "his", "her", "their", "he", "she", "they", "them", "that", "this", "same", "person", "one",
+    "profile", "profiles", "member", "members", "about", "details", "detail", "info", "information",
+    "location", "city", "where", "live", "lives", "living", "from", "relation", "relationship",
+    "phone", "mobile", "number", "contact", "family", "id", "age", "old"
+]
+
+private let assistantIgnoredRelationshipWords: Set<String> = [
+    "bhai", "bhaiya", "bhaiyaa", "dada", "dadaji", "dadi", "dadiji", "didi", "behan", "bhabhi",
+    "jijaji", "kaka", "kakaji", "kaki", "chacha", "chachaji", "chachi", "mama", "mamaji", "mami",
+    "mausa", "mausaji", "mausi", "bua", "fufa", "fufaji", "papa", "mummy", "beta", "beti",
+    "uncle", "aunty", "ji", "sir"
+]
+
+private func searchableAssistantWords(_ text: String) -> [String] {
+    text.lowercased()
+        .components(separatedBy: CharacterSet.alphanumerics.inverted)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter {
+            $0.count > 1
+                && !assistantIgnoredQuestionWords.contains($0)
+                && !assistantIgnoredRelationshipWords.contains($0)
+        }
+}
+
+private func isBirthdayQuestion(_ question: String) -> Bool {
+    ["birthday", "bday", "dob", "date of birth", "janam", "janmadin", "जन्म"].contains { question.contains($0) }
+}
+
+private func isAnniversaryQuestion(_ question: String) -> Bool {
+    ["anniversary", "marriage", "wedding", "shaadi", "vivah", "सालगिरह"].contains { question.contains($0) }
+}
+
+private func isLocationQuestion(_ question: String) -> Bool {
+    ["location", "city", "where", "live", "lives", "living", "from"].contains { question.contains($0) }
+}
+
+private func isPhoneQuestion(_ question: String) -> Bool {
+    ["phone", "mobile", "number", "contact"].contains { question.contains($0) }
+}
+
+private func isRelationshipQuestion(_ question: String) -> Bool {
+    ["relation", "relationship", "rishta", "kaun"].contains { question.contains($0) }
+}
+
+private func isAssistantFollowUpQuestion(_ question: String) -> Bool {
+    let words = searchableAssistantWords(question)
+    if words.isEmpty { return true }
+    return [
+        "his", "her", "their", "he", "she", "they", "them", "same", "that person", "this person",
+        "what about", "and ", "also", "where", "location", "birthday", "anniversary", "relation",
+        "relationship", "phone", "contact"
+    ].contains { question.contains($0) }
+}
+
+private func findMemberMatches(question: String, members: [Member]) -> [AssistantMemberMatch] {
+    let queryWords = searchableAssistantWords(question)
+    guard !queryWords.isEmpty else { return [] }
+    let joinedQuery = queryWords.joined(separator: " ")
+
+    let matches = members.compactMap { member -> AssistantMemberMatch? in
+        let nameWords = searchableAssistantWords(member.name)
+        let candidateWords = nameWords + searchableAssistantWords(member.familyId)
+        let searchableName = nameWords.joined(separator: " ")
+        let searchableCandidate = candidateWords.joined(separator: " ")
+        guard !candidateWords.isEmpty else { return nil }
+
+        let exactScore: Int
+        if searchableName == joinedQuery {
+            exactScore = 120
+        } else if searchableCandidate == joinedQuery {
+            exactScore = 116
+        } else if searchableName.contains(joinedQuery) {
+            exactScore = 100 + joinedQuery.count
+        } else if searchableCandidate.contains(joinedQuery) {
+            exactScore = 92 + joinedQuery.count
+        } else if queryWords.allSatisfy({ query in candidateWords.contains(query) }) {
+            exactScore = 90 + queryWords.count
+        } else if queryWords.allSatisfy({ query in candidateWords.contains { $0.hasPrefix(query) } }) {
+            exactScore = 75 + queryWords.count
+        } else if queryWords.contains(where: { query in candidateWords.contains(query) }) {
+            exactScore = 50
+        } else if queryWords.contains(where: { query in candidateWords.contains { $0.hasPrefix(query) } }) {
+            exactScore = 35
+        } else {
+            exactScore = 0
+        }
+
+        let fuzzyScores = queryWords.map { query in
+            nameWords.map { fuzzyWordScore(query: query, candidate: $0) }.max() ?? 0
+        }
+        let fuzzyScore: Int
+        if !fuzzyScores.isEmpty, fuzzyScores.allSatisfy({ $0 > 0 }) {
+            fuzzyScore = Int(Double(fuzzyScores.reduce(0, +)) / Double(fuzzyScores.count)) + queryWords.count
+        } else {
+            fuzzyScore = 0
+        }
+
+        let score = max(exactScore, fuzzyScore)
+        guard score > 0 else { return nil }
+        return AssistantMemberMatch(member: member, score: score, isFuzzy: exactScore == 0 && fuzzyScore > 0)
+    }
+    .sorted {
+        if $0.score == $1.score {
+            return $0.member.name < $1.member.name
+        }
+        return $0.score > $1.score
+    }
+
+    guard let bestScore = matches.first?.score else { return [] }
+    return Array(matches.filter { $0.score >= bestScore - 12 && $0.score >= 42 }.prefix(5))
+}
+
+private func fuzzyWordScore(query: String, candidate: String) -> Int {
+    guard query.count >= 3, candidate.count >= 3 else { return 0 }
+    let distance = editDistance(query, candidate)
+    let maxLength = max(query.count, candidate.count)
+    let similarity = 1.0 - (Double(distance) / Double(maxLength))
+
+    if distance == 1 && maxLength >= 4 { return 68 }
+    if distance == 2 && maxLength >= 6 { return 58 }
+    if similarity >= 0.78 { return 58 }
+    if similarity >= 0.70 && maxLength >= 5 { return 45 }
+    return 0
+}
+
+private func editDistance(_ lhs: String, _ rhs: String) -> Int {
+    if lhs == rhs { return 0 }
+    if lhs.isEmpty { return rhs.count }
+    if rhs.isEmpty { return lhs.count }
+
+    let a = Array(lhs)
+    let b = Array(rhs)
+    var previous = Array(0...b.count)
+    var current = Array(repeating: 0, count: b.count + 1)
+
+    for i in 1...a.count {
+        current[0] = i
+        for j in 1...b.count {
+            let cost = a[i - 1] == b[j - 1] ? 0 : 1
+            current[j] = min(
+                current[j - 1] + 1,
+                previous[j] + 1,
+                previous[j - 1] + cost
+            )
+        }
+        previous = current
+    }
+
+    return previous[b.count]
+}
+
+private struct AssistantMessage: Identifiable {
+    let id = UUID()
+    let text: String
+    let isUser: Bool
+}
+
+private struct AssistantBubble: View {
+    let message: AssistantMessage
+
+    var body: some View {
+        HStack {
+            if message.isUser { Spacer(minLength: 40) }
+            Text(message.text)
+                .font(.footnote)
+                .foregroundStyle(message.isUser ? .white : .primary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .background(message.isUser ? AndroidLook.softBrown : Color.white.opacity(0.82), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            if !message.isUser { Spacer(minLength: 40) }
+        }
+    }
+}
+
+private struct AICardGeneratorScreen: View {
+    @Bindable var viewModel: AppViewModel
+    let member: Member
+    let eventType: DashboardFamilyEvent.EventType
+    @State private var headline: String
+    @State private var nameLine: String
+    @State private var message: String
+    @State private var fromLabel = "With love from"
+    @State private var sender = "Purawale - Hum aur Humare"
+    @State private var closingLine: String
+    @State private var selectedStyle = 0
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedImageData: Data?
+    @State private var photoAdjustments = CardPhotoAdjustments()
+    @State private var textSettings = CardTextSettings()
+    @State private var isPhotoEditorExpanded = false
+    @State private var isTextStyleExpanded = false
+
+    init(viewModel: AppViewModel, member: Member, eventType: DashboardFamilyEvent.EventType) {
+        self.viewModel = viewModel
+        self.member = member
+        self.eventType = eventType
+        _headline = State(initialValue: eventType == .anniversary ? "Happy Anniversary" : "Happy Birthday")
+        _nameLine = State(initialValue: Self.defaultNameLine(for: member, eventType: eventType, members: viewModel.allResolvedMembers))
+        _message = State(initialValue: Self.defaultMessage(for: member, eventType: eventType))
+        _closingLine = State(initialValue: "We love you \(Self.defaultNameLine(for: member, eventType: eventType, members: viewModel.allResolvedMembers))")
+    }
+
+    private let styles: [GreetingCardStyle] = [
+        GreetingCardStyle(
+            name: "Ivory",
+            assetName: "AICardFrameIvory",
+            background: Color(red: 1.0, green: 0.97, blue: 0.91),
+            primary: Color(red: 0.48, green: 0.07, blue: 0.11),
+            secondary: Color(red: 0.25, green: 0.14, blue: 0.09),
+            accent: Color(red: 0.75, green: 0.54, blue: 0.10),
+            photoBorder: Color(red: 0.75, green: 0.54, blue: 0.10),
+            plate: Color(red: 1.0, green: 0.95, blue: 0.82).opacity(0.90)
+        ),
+        GreetingCardStyle(
+            name: "Burgundy",
+            assetName: "AICardFrameBurgundy",
+            background: Color(red: 0.35, green: 0.06, blue: 0.08),
+            primary: Color(red: 1.0, green: 0.83, blue: 0.48),
+            secondary: Color(red: 1.0, green: 0.95, blue: 0.83),
+            accent: Color(red: 0.83, green: 0.64, blue: 0.22),
+            photoBorder: Color(red: 0.83, green: 0.64, blue: 0.22),
+            plate: Color(red: 0.35, green: 0.06, blue: 0.08).opacity(0.70)
+        ),
+        GreetingCardStyle(
+            name: "Navy",
+            assetName: "AICardFrameNavy",
+            background: Color(red: 0.04, green: 0.16, blue: 0.27),
+            primary: Color(red: 1.0, green: 0.83, blue: 0.48),
+            secondary: Color(red: 1.0, green: 0.95, blue: 0.83),
+            accent: Color(red: 0.84, green: 0.66, blue: 0.31),
+            photoBorder: Color(red: 0.84, green: 0.66, blue: 0.31),
+            plate: Color(red: 0.04, green: 0.16, blue: 0.27).opacity(0.74)
+        ),
+        GreetingCardStyle(
+            name: "Blush",
+            assetName: "AICardFrameBlush",
+            background: Color(red: 1.0, green: 0.88, blue: 0.91),
+            primary: Color(red: 0.48, green: 0.07, blue: 0.11),
+            secondary: Color(red: 0.29, green: 0.16, blue: 0.13),
+            accent: Color(red: 0.75, green: 0.54, blue: 0.10),
+            photoBorder: Color(red: 0.75, green: 0.54, blue: 0.10),
+            plate: Color(red: 1.0, green: 0.88, blue: 0.91).opacity(0.86)
+        )
+    ]
+
+    var body: some View {
+        AppBackground {
+            NavigationStack {
+                ScrollView {
+                    VStack(spacing: 20) {
+                        GreetingCardPreview(
+                            member: member,
+                            headline: headline,
+                            nameLine: nameLine,
+                            message: message,
+                            fromLabel: fromLabel,
+                            sender: sender,
+                            closingLine: closingLine,
+                            eventType: eventType,
+                            style: styles[selectedStyle],
+                            customImageData: selectedImageData,
+                            photoAdjustments: photoAdjustments,
+                            textSettings: textSettings
+                        )
+                        .frame(maxWidth: 360)
+                        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                        .padding(.top, 12)
+
+                        VStack(alignment: .leading, spacing: 14) {
+                            GroupBox("Frame") {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 12) {
+                                            ForEach(styles.indices, id: \.self) { index in
+                                                CardFrameChoice(
+                                                    style: styles[index],
+                                                    selected: selectedStyle == index,
+                                                    action: { selectedStyle = index }
+                                                )
+                                            }
+                                        }
+                                        .padding(.vertical, 2)
+                                    }
+                                    Picker("Frame", selection: $selectedStyle) {
+                                        ForEach(styles.indices, id: \.self) { index in
+                                            Text(styles[index].name).tag(index)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                }
+                            }
+
+                            DisclosureGroup(isExpanded: $isPhotoEditorExpanded) {
+                                VStack(spacing: 12) {
+                                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                                        AndroidIconActionButtonLabel(
+                                            title: selectedImageData == nil ? "Add photo" : "Change photo",
+                                            subtitle: "Card portrait",
+                                            systemImage: "photo.on.rectangle.angled"
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    PhotoEditControls(
+                                        adjustments: $photoAdjustments,
+                                        onReset: { photoAdjustments = CardPhotoAdjustments() }
+                                    )
+                                }
+                                .padding(.top, 8)
+                            } label: {
+                                Label("Photo editor", systemImage: "slider.horizontal.3")
+                                    .font(.headline)
+                            }
+
+                            GroupBox("Card text") {
+                                VStack(alignment: .leading, spacing: 9) {
+                                    TextField("Headline", text: $headline)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Name label on card", text: $nameLine)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Wish message", text: $message, axis: .vertical)
+                                        .textFieldStyle(.roundedBorder)
+                                        .lineLimit(2...4)
+                                    TextField("From label", text: $fromLabel)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Sender / addressee", text: $sender)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Closing line", text: $closingLine)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                                .padding(.top, 4)
+                            }
+
+                            DisclosureGroup(isExpanded: $isTextStyleExpanded) {
+                                TextStyleControls(style: styles[selectedStyle], settings: $textSettings)
+                                    .padding(.top, 8)
+                            } label: {
+                                Label("Text style", systemImage: "textformat")
+                                    .font(.headline)
+                            }
+
+                            Button {
+                                regenerate()
+                            } label: {
+                                AndroidIconActionButtonLabel(
+                                    title: "Regenerate",
+                                    subtitle: "Message",
+                                    systemImage: "sparkles"
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(14)
+                        .background(Color(red: 0.98, green: 0.94, blue: 0.86).opacity(0.96), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(AndroidLook.accentGold.opacity(0.45), lineWidth: 1)
+                        )
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.bottom, 24)
+                }
+                .task(id: selectedPhotoItem) {
+                    guard let selectedPhotoItem else { return }
+                    if let data = try? await selectedPhotoItem.loadTransferable(type: Data.self) {
+                        selectedImageData = data
+                        photoAdjustments = CardPhotoAdjustments()
+                    }
+                }
+                .navigationTitle(localized("AI Card Generator", language: viewModel.language))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(localized("Home", language: viewModel.language)) {
+                            viewModel.showDashboard()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func regenerate() {
+        let options = [
+            Self.defaultMessage(for: member, eventType: eventType),
+            "May this day bring warmth, laughter, blessings, and memories your whole family will keep close.",
+            "With love from all of us, wishing you a day filled with joy, grace, and togetherness."
+        ]
+        message = options.randomElement() ?? message
+    }
+
+    private static func defaultNameLine(for member: Member, eventType: DashboardFamilyEvent.EventType, members: [Member]) -> String {
+        if eventType == .anniversary {
+            let partnerId = member.familyId.hasSuffix("0") ? String(member.familyId.dropLast()) : member.familyId + "0"
+            let partner = members.first { $0.familyId == partnerId }
+            if let partnerName = member.spouseName ?? partner?.name {
+                return "\(member.name) & \(partnerName)"
+            }
+        }
+        return member.name.split(separator: " ").first.map(String.init) ?? member.name
+    }
+
+    private static func defaultMessage(for member: Member, eventType: DashboardFamilyEvent.EventType) -> String {
+        switch eventType {
+        case .birthday:
+            let firstName = member.name.split(separator: " ").first.map(String.init) ?? "you"
+            return "Wishing \(firstName) health, happiness, and a year full of family blessings."
+        case .anniversary:
+            return "Celebrating your togetherness with love, respect, and warm wishes from the whole family."
+        case .remembrance:
+            return "Remembering with gratitude, love, and the quiet strength of family memories."
+        }
+    }
+}
+
+private struct GreetingCardStyle {
+    let name: String
+    let assetName: String
+    let background: Color
+    let primary: Color
+    let secondary: Color
+    let accent: Color
+    let photoBorder: Color
+    let plate: Color
+}
+
+private struct CardPhotoAdjustments: Equatable {
+    var scale: Double = 1.0
+    var offsetX: Double = 0.0
+    var offsetY: Double = 0.0
+    var rotation: Double = 0.0
+    var brightness: Double = 0.0
+    var contrast: Double = 1.0
+    var saturation: Double = 1.0
+}
+
+private struct CardTextSettings: Equatable {
+    var fontIndex = 0
+    var sizeScale: Double = 1.0
+    var colorIndex = 0
+}
+
+private struct GreetingCardPreview: View {
+    let member: Member
+    let headline: String
+    let nameLine: String
+    let message: String
+    let fromLabel: String
+    let sender: String
+    let closingLine: String
+    let eventType: DashboardFamilyEvent.EventType
+    let style: GreetingCardStyle
+    let customImageData: Data?
+    let photoAdjustments: CardPhotoAdjustments
+    let textSettings: CardTextSettings
+
+    private var years: Int? {
+        switch eventType {
+        case .birthday:
+            return completedYears(since: member.dateOfBirth)
+        case .anniversary:
+            return completedYears(since: member.marriageDate)
+        case .remembrance:
+            return nil
+        }
+    }
+
+    private var eventLabel: String {
+        switch eventType {
+        case .birthday:
+            return "Birthday"
+        case .anniversary:
+            return "Anniversary"
+        case .remembrance:
+            return "Remembrance"
+        }
+    }
+
+    private var editableFont: Font.Design {
+        switch textSettings.fontIndex {
+        case 0:
+            return .serif
+        case 1:
+            return .rounded
+        default:
+            return .default
+        }
+    }
+
+    private var editableColor: Color {
+        let options = cardTextColorOptions(for: style)
+        return options[min(max(textSettings.colorIndex, 0), options.count - 1)].color
+    }
+
+    private var editableScale: Double {
+        min(max(textSettings.sizeScale, 0.85), 1.2)
+    }
+
+    var body: some View {
+        ZStack {
+            style.background
+
+            CardFrameArtwork(style: style)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 7) {
+                Text(headline)
+                    .font(.system(size: 25, weight: .semibold, design: .serif))
+                    .foregroundStyle(style.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                if let years, years > 0 {
+                    HStack(alignment: .top, spacing: 2) {
+                        Text("\(years)")
+                            .font(.system(size: 58, weight: .bold, design: .serif))
+                            .foregroundStyle(style.accent)
+                            .lineLimit(1)
+                        Text(ordinalSuffix(years))
+                            .font(.system(size: 17, weight: .semibold, design: .serif))
+                            .foregroundStyle(style.primary)
+                            .padding(.top, 10)
+                    }
+                    .frame(height: 62)
+                } else {
+                    Spacer()
+                        .frame(height: 12)
+                }
+
+                Text(eventLabel)
+                    .font(.system(size: 35, weight: .semibold, design: .serif))
+                    .foregroundStyle(style.primary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                AICardOrnamentDivider(style: style)
+
+                Text(nameLine)
+                    .font(.system(size: 27 * editableScale, weight: .semibold, design: editableFont))
+                    .foregroundStyle(editableColor)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity)
+                    .background(style.plate, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .stroke(style.accent.opacity(0.80), lineWidth: 1)
+                    )
+                    .padding(.horizontal, 16)
+
+                CardMemberPhoto(
+                    member: member,
+                    customImageData: customImageData,
+                    adjustments: photoAdjustments,
+                    border: style.photoBorder
+                )
+                    .frame(height: 144)
+                    .padding(.horizontal, 22)
+                    .padding(.vertical, 4)
+
+                Text(message)
+                    .font(.system(size: 16 * editableScale, weight: .semibold, design: editableFont))
+                    .foregroundStyle(editableColor)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.70)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(style.plate.opacity(0.72), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .padding(.horizontal, 18)
+
+                Spacer(minLength: 0)
+
+                Text(fromLabel)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(style.primary.opacity(0.72))
+
+                Text(sender)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(style.primary.opacity(0.88))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+
+                if !closingLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(closingLine)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(style.primary.opacity(0.72))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+            }
+            .padding(.horizontal, 34)
+            .padding(.top, 34)
+            .padding(.bottom, 28)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 10)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct CardFrameChoice: View {
+    let style: GreetingCardStyle
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                CardFrameArtwork(style: style)
+                    .frame(width: 62, height: 92)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(selected ? AndroidLook.accentGold : Color.secondary.opacity(0.40), lineWidth: selected ? 3 : 1)
+                    )
+                Text(style.name)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct AndroidIconActionButtonLabel: View {
+    let title: String
+    let subtitle: String
+    let systemImage: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                    )
+
+                Image(systemName: systemImage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(AndroidLook.accentGold)
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Text(subtitle)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.64))
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(Color.white.opacity(0.48))
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 64)
+        .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AndroidLook.accentGold.opacity(0.28), lineWidth: 1)
+        )
+    }
+}
+
+private struct CardFrameArtwork: View {
+    let style: GreetingCardStyle
+
+    var body: some View {
+        Image(style.assetName)
+            .resizable()
+            .scaledToFill()
+    }
+}
+
+private struct CardMemberPhoto: View {
+    let member: Member
+    let customImageData: Data?
+    let adjustments: CardPhotoAdjustments
+    let border: Color
+
+    var body: some View {
+        Group {
+            if let customImageData, let uiImage = UIImage(data: customImageData) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else if let data = imageData(fromStoredPhoto: member.photoURL), let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else if let url = imageURL(fromStoredPhoto: member.photoURL) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case let .success(image):
+                        image
+                            .resizable()
+                            .scaledToFill()
+                    default:
+                        fallback
+                    }
+                }
+            } else {
+                fallback
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .scaleEffect(adjustments.scale)
+        .offset(x: adjustments.offsetX, y: adjustments.offsetY)
+        .rotationEffect(.degrees(adjustments.rotation))
+        .brightness(adjustments.brightness)
+        .contrast(adjustments.contrast)
+        .saturation(adjustments.saturation)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .stroke(border.opacity(0.58), lineWidth: 1)
+        )
+        .background(.white, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+        .shadow(color: .black.opacity(0.12), radius: 2, x: 0, y: 1)
+    }
+
+    private var fallback: some View {
+        Rectangle()
+            .fill(Color.white)
+            .overlay {
+                VStack(spacing: 8) {
+                    Image(systemName: "person.crop.rectangle")
+                        .font(.title)
+                    Text(member.initials)
+                        .font(.title2.weight(.bold))
+                }
+                .foregroundStyle(border)
+            }
+    }
+}
+
+private struct PhotoEditControls: View {
+    @Binding var adjustments: CardPhotoAdjustments
+    let onReset: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Photo edits")
+                    .font(.headline)
+                Spacer()
+                Button("Reset", action: onReset)
+                    .font(.caption.weight(.semibold))
+            }
+
+            LabeledCardSlider(label: "Zoom", value: $adjustments.scale, range: 0.8...3.0)
+            LabeledCardSlider(label: "Pan X", value: $adjustments.offsetX, range: -90...90)
+            LabeledCardSlider(label: "Pan Y", value: $adjustments.offsetY, range: -70...70)
+            LabeledCardSlider(label: "Rotation", value: $adjustments.rotation, range: -180...180)
+            LabeledCardSlider(label: "Brightness", value: $adjustments.brightness, range: -0.35...0.35)
+            LabeledCardSlider(label: "Contrast", value: $adjustments.contrast, range: 0.65...1.65)
+            LabeledCardSlider(label: "Saturation", value: $adjustments.saturation, range: 0.0...1.8)
+
+            HStack(spacing: 8) {
+                Button {
+                    adjustments.rotation = normalizedRotation(adjustments.rotation - 90)
+                } label: {
+                    Label("Rotate left", systemImage: "rotate.left")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+
+                Button {
+                    adjustments.rotation = normalizedRotation(adjustments.rotation + 90)
+                } label: {
+                    Label("Rotate right", systemImage: "rotate.right")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+            .font(.caption.weight(.semibold))
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func normalizedRotation(_ value: Double) -> Double {
+        var result = value.truncatingRemainder(dividingBy: 360)
+        if result > 180 { result -= 360 }
+        if result < -180 { result += 360 }
+        return result
+    }
+}
+
+private struct TextStyleControls: View {
+    let style: GreetingCardStyle
+    @Binding var settings: CardTextSettings
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Editable text style")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                ForEach(Array(["Serif", "Rounded", "Classic"].enumerated()), id: \.offset) { index, label in
+                    Button(label) {
+                        settings.fontIndex = index
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(settings.fontIndex == index ? AndroidLook.accentGold : .secondary)
+                }
+            }
+
+            LabeledCardSlider(label: "Text size", value: $settings.sizeScale, range: 0.85...1.2)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(cardTextColorOptions(for: style).enumerated()), id: \.offset) { index, option in
+                        Button {
+                            settings.colorIndex = index
+                        } label: {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(option.color)
+                                    .frame(width: 14, height: 14)
+                                    .overlay(Circle().stroke(Color.secondary.opacity(0.35), lineWidth: 1))
+                                Text(option.name)
+                            }
+                            .font(.caption.weight(.semibold))
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(settings.colorIndex == index ? AndroidLook.accentGold : .secondary)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct LabeledCardSlider: View {
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+
+    var body: some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                Spacer()
+                Text(value.formatted(.number.precision(.fractionLength(2))))
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: $value, in: range)
+        }
+    }
+}
+
+private func cardTextColorOptions(for style: GreetingCardStyle) -> [(name: String, color: Color)] {
+    [
+        ("Primary", style.primary),
+        ("Secondary", style.secondary),
+        ("Accent", style.accent),
+        ("Dark", AndroidLook.deepBrown),
+        ("Light", Color.white)
+    ]
+}
+
+private struct AICardOrnamentDivider: View {
+    let style: GreetingCardStyle
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Rectangle()
+                .fill(style.accent.opacity(0.55))
+                .frame(height: 1)
+            Text("♥")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(style.primary)
+            Rectangle()
+                .fill(style.accent.opacity(0.55))
+                .frame(height: 1)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.horizontal, 64)
+    }
+}
+
+private struct BusinessDirectoryScreen: View {
+    @Bindable var viewModel: AppViewModel
+
+    var body: some View {
+        PlaceholderFeatureScreen(
+            viewModel: viewModel,
+            title: localized("Business Directory", language: viewModel.language),
+            systemImage: "building.2.fill",
+            message: "A shared family business directory from Android is now represented in iOS navigation. Backend business collection syncing can be added next."
+        )
+    }
+}
+
+private struct EmergencyScreen: View {
+    @Bindable var viewModel: AppViewModel
+
+    var emergencyContacts: [Member] {
+        let admins = viewModel.dashboardApprovedMembers.filter { $0.isAdmin || $0.isEditor }
+        let fallback = viewModel.dashboardApprovedMembers.filter { !$0.phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        return Array((admins.isEmpty ? fallback : admins).prefix(12))
+    }
+
+    var body: some View {
+        AppBackground {
+            NavigationStack {
+                List {
+                    Section("Family Emergency Contacts") {
+                        ForEach(emergencyContacts) { member in
+                            HStack(spacing: 12) {
+                                AvatarView(member: member, size: 38)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(member.name)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(member.relationship ?? (member.isAdmin ? "Admin" : member.phoneNumber))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                let digits = member.phoneNumber.filter(\.isNumber)
+                                if !digits.isEmpty, let phoneURL = URL(string: "tel://\(digits)") {
+                                    Link(destination: phoneURL) {
+                                        Image(systemName: "phone.fill")
+                                            .foregroundStyle(.white)
+                                            .frame(width: 34, height: 34)
+                                            .background(Color.red, in: Circle())
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .navigationTitle(localized("Emergency", language: viewModel.language))
+                .toolbar { Button(localized("Home", language: viewModel.language)) { viewModel.showDashboard() } }
+            }
+        }
+    }
+}
+
+private struct AchievementsScreen: View {
+    @Bindable var viewModel: AppViewModel
+    @State private var showEditor = false
+    @State private var achievementToDelete: CommunityAchievement?
+
+    var body: some View {
+        AppBackground {
+            NavigationStack {
+                ScrollView {
+                    LazyVStack(spacing: 16) {
+                        if viewModel.communityAchievements.isEmpty {
+                            ContentUnavailableView(
+                                "Purawale Achievements",
+                                systemImage: "trophy.fill",
+                                description: Text("No community achievements have been shared yet.")
+                            )
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity, minHeight: 360)
+                        } else {
+                            ForEach(viewModel.communityAchievements.sorted { $0.timestamp > $1.timestamp }) { achievement in
+                                AchievementCard(
+                                    achievement: achievement,
+                                    canDelete: viewModel.hasAdminPrivileges || achievement.addedBy == viewModel.currentUser?.id,
+                                    onDelete: { achievementToDelete = achievement }
+                                )
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                }
+                .navigationTitle("Purawale Achievements")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button(localized("Home", language: viewModel.language)) {
+                            viewModel.showDashboard()
+                        }
+                    }
+
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showEditor = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("Add Achievement")
+                    }
+                }
+                .sheet(isPresented: $showEditor) {
+                    AchievementEditorSheet(
+                        currentUser: viewModel.currentUser,
+                        onSave: { achievement in
+                            viewModel.saveAchievement(achievement)
+                            showEditor = false
+                        },
+                        onCancel: {
+                            showEditor = false
+                        }
+                    )
+                }
+                .alert("Delete Achievement", isPresented: Binding(
+                    get: { achievementToDelete != nil },
+                    set: { if !$0 { achievementToDelete = nil } }
+                )) {
+                    Button("Cancel", role: .cancel) {
+                        achievementToDelete = nil
+                    }
+                    Button("Delete", role: .destructive) {
+                        if let achievementToDelete {
+                            viewModel.deleteAchievement(achievementToDelete)
+                        }
+                        achievementToDelete = nil
+                    }
+                } message: {
+                    Text("Are you sure you want to delete this achievement?")
+                }
+            }
+        }
+    }
+}
+
+private struct AchievementCard: View {
+    let achievement: CommunityAchievement
+    let canDelete: Bool
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            achievementImage
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(achievement.title)
+                            .font(.title3.weight(.heavy))
+                            .foregroundStyle(.white)
+                        Text(achievement.memberName)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(AndroidLook.accentGold)
+                    }
+
+                    Spacer()
+
+                    if canDelete {
+                        Button(action: onDelete) {
+                            Image(systemName: "trash.fill")
+                                .frame(width: 34, height: 34)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                    }
+                }
+
+                if !achievement.description.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(achievement.description)
+                        .font(.subheadline)
+                        .foregroundStyle(Color.white.opacity(0.80))
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(achievement.date.isEmpty ? "Date not set" : achievement.date, systemImage: "calendar")
+                    if !achievement.location.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Label(achievement.location, systemImage: "location.fill")
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.white.opacity(0.62))
+
+                if let mapsURL = sanitizedURL(achievement.mapsLink) {
+                    Link(destination: mapsURL) {
+                        Label("View on Map", systemImage: "map.fill")
+                            .font(.subheadline.weight(.bold))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(AndroidLook.accentGold)
+                }
+            }
+            .padding(16)
+        }
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var achievementImage: some View {
+        if let data = imageData(fromStoredPhoto: achievement.imageURL), let uiImage = UIImage(data: data) {
+            Image(uiImage: uiImage)
+                .resizable()
+                .scaledToFill()
+                .frame(height: 200)
+                .frame(maxWidth: .infinity)
+                .clipped()
+        } else if let url = sanitizedURL(achievement.imageURL) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case let .success(image):
+                    image
+                        .resizable()
+                        .scaledToFill()
+                case .empty:
+                    ProgressView()
+                default:
+                    EmptyView()
+                }
+            }
+            .frame(height: 200)
+            .frame(maxWidth: .infinity)
+            .clipped()
+        }
+    }
+
+    private func sanitizedURL(_ value: String) -> URL? {
+        var string = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !string.isEmpty else { return nil }
+        if !string.localizedCaseInsensitiveContains("://") {
+            string = "https://\(string)"
+        }
+        return URL(string: string)
+    }
+}
+
+private struct AchievementEditorSheet: View {
+    let currentUser: Member?
+    let onSave: (CommunityAchievement) -> Void
+    let onCancel: () -> Void
+
+    @State private var title = ""
+    @State private var memberName = ""
+    @State private var description = ""
+    @State private var date = Member.isoDateFormatter.string(from: .now)
+    @State private var location = ""
+    @State private var mapsLink = ""
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedImageData: Data?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Achievement") {
+                    TextField("Achievement Title", text: $title)
+                    TextField("Member Name", text: $memberName)
+                    TextField("Description", text: $description, axis: .vertical)
+                        .lineLimit(2...5)
+                    ISODatePickerRow(title: "Date", value: $date, allowsClear: true)
+                }
+
+                Section("Location") {
+                    TextField("Location", text: $location)
+                    TextField("Maps Link", text: $mapsLink, axis: .vertical)
+                }
+
+                Section("Photo") {
+                    PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                        Label(selectedImageData == nil ? "Add Photo" : "Photo Selected", systemImage: "photo")
+                    }
+                    if let selectedImageData, let uiImage = UIImage(data: selectedImageData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(height: 160)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                }
+            }
+            .task(id: selectedPhotoItem) {
+                guard let selectedPhotoItem else { return }
+                selectedImageData = try? await selectedPhotoItem.loadTransferable(type: Data.self)
+            }
+            .navigationTitle("Add Achievement")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        onSave(
+                            CommunityAchievement(
+                                id: UUID().uuidString,
+                                memberName: memberName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                memberId: nil,
+                                title: title.trimmingCharacters(in: .whitespacesAndNewlines),
+                                description: description.trimmingCharacters(in: .whitespacesAndNewlines),
+                                date: date.trimmingCharacters(in: .whitespacesAndNewlines),
+                                location: location.trimmingCharacters(in: .whitespacesAndNewlines),
+                                mapsLink: mapsLink.trimmingCharacters(in: .whitespacesAndNewlines),
+                                imageURL: imageString,
+                                timestamp: .now,
+                                addedBy: currentUser?.id ?? ""
+                            )
+                        )
+                    }
+                    .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || memberName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .onAppear {
+                if memberName.isEmpty {
+                    memberName = currentUser?.name ?? ""
+                }
+            }
+        }
+    }
+
+    private var imageString: String {
+        guard let selectedImageData, let image = UIImage(data: selectedImageData), let data = image.jpegData(compressionQuality: 0.78) else {
+            return ""
+        }
+        return storedPhotoString(from: data)
+    }
+}
+
+private struct ActivityLogScreen: View {
+    @Bindable var viewModel: AppViewModel
+
+    var body: some View {
+        AppBackground {
+            NavigationStack {
+                List {
+                    Section("Recent App Activity") {
+                        ActivityLogRow(icon: "person.3.fill", title: "Approved profiles", detail: "\(viewModel.approvedMembers.count) members")
+                        ActivityLogRow(icon: "photo.fill", title: "Memory posts", detail: "\(viewModel.approvedMemories.count) visible posts")
+                        ActivityLogRow(icon: "text.bubble.fill", title: "Discussion threads", detail: "\(viewModel.visibleDiscussions.count) visible threads")
+                        ActivityLogRow(icon: "trash.fill", title: "Deletion requests", detail: "\(viewModel.pendingDeletionCount) pending")
+                        ActivityLogRow(icon: "arrow.triangle.branch", title: "Relationship requests", detail: "\(viewModel.pendingOverrideCount) pending")
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .navigationTitle(localized("Activity Log", language: viewModel.language))
+                .toolbar { Button(localized("Home", language: viewModel.language)) { viewModel.showDashboard() } }
+            }
+        }
+    }
+}
+
+private struct LoginLogScreen: View {
+    @Bindable var viewModel: AppViewModel
+
+    var body: some View {
+        AppBackground {
+            NavigationStack {
+                List {
+                    Section("Recent Sign-ins") {
+                        ForEach(viewModel.approvedMembers.filter { $0.lastLoggedIn != nil }.sorted { ($0.lastLoggedIn ?? 0) > ($1.lastLoggedIn ?? 0) }.prefix(30)) { member in
+                            HStack(spacing: 12) {
+                                AvatarView(member: member, size: 34)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(member.name)
+                                        .font(.subheadline.weight(.semibold))
+                                    Text(loginDisplayDate(member.lastLoggedIn) ?? "No login timestamp")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
+                .navigationTitle(localized("Login Log", language: viewModel.language))
+                .toolbar { Button(localized("Home", language: viewModel.language)) { viewModel.showDashboard() } }
+            }
+        }
+    }
+}
+
+private struct ActivityLogRow: View {
+    let icon: String
+    let title: String
+    let detail: String
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: icon)
+                .foregroundStyle(AndroidLook.accentGold)
+        }
+    }
+}
+
+private struct PlaceholderFeatureScreen: View {
+    @Bindable var viewModel: AppViewModel
+    let title: String
+    let systemImage: String
+    let message: String
+
+    var body: some View {
+        AppBackground {
+            NavigationStack {
+                VStack(spacing: 16) {
+                    Image(systemName: systemImage)
+                        .font(.system(size: 48, weight: .semibold))
+                        .foregroundStyle(AndroidLook.accentGold)
+                    Text(title)
+                        .font(.title2.weight(.bold))
+                    Text(message)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 28)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .navigationTitle(title)
+                .toolbar { Button(localized("Home", language: viewModel.language)) { viewModel.showDashboard() } }
+            }
+        }
     }
 }
 
@@ -3987,7 +6333,11 @@ private struct AvatarView: View {
 
     var body: some View {
         Group {
-            if let photoURL = member.photoURL, let url = URL(string: photoURL), !photoURL.isEmpty {
+            if let data = imageData(fromStoredPhoto: member.photoURL), let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else if let url = imageURL(fromStoredPhoto: member.photoURL) {
                 AsyncImage(url: url) { phase in
                     switch phase {
                     case let .success(image):
@@ -4017,6 +6367,119 @@ private struct AvatarView: View {
     }
 }
 
+private struct ProfilePhotoEditor: View {
+    let member: Member
+    let storedPhoto: String
+    let selectedImageData: Data?
+    let adjustments: CardPhotoAdjustments
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.black.opacity(0.08))
+
+            photoImage
+                .scaledToFill()
+                .scaleEffect(adjustments.scale)
+                .offset(x: adjustments.offsetX, y: adjustments.offsetY)
+                .rotationEffect(.degrees(adjustments.rotation))
+                .brightness(adjustments.brightness)
+                .contrast(adjustments.contrast)
+                .saturation(adjustments.saturation)
+        }
+        .frame(height: 220)
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.secondary.opacity(0.22), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private var photoImage: some View {
+        if let selectedImageData, let uiImage = UIImage(data: selectedImageData) {
+            Image(uiImage: uiImage)
+                .resizable()
+        } else if let data = imageData(fromStoredPhoto: storedPhoto), let uiImage = UIImage(data: data) {
+            Image(uiImage: uiImage)
+                .resizable()
+        } else if let url = imageURL(fromStoredPhoto: storedPhoto) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case let .success(image):
+                    image.resizable()
+                default:
+                    placeholder
+                }
+            }
+        } else {
+            placeholder
+        }
+    }
+
+    private var placeholder: some View {
+        Rectangle()
+            .fill(AndroidLook.lightGolden.opacity(0.36))
+            .overlay {
+                VStack(spacing: 8) {
+                    Image(systemName: "person.crop.square")
+                        .font(.title)
+                    Text(member.initials)
+                        .font(.title2.weight(.bold))
+                }
+                .foregroundStyle(AndroidLook.softBrown)
+            }
+    }
+}
+
+private extension UIImage {
+    func editedSquareJPEGData(adjustments: CardPhotoAdjustments, side: CGFloat = 900) -> Data? {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+        let rendered = renderer.image { context in
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+
+            let cgContext = context.cgContext
+            cgContext.translateBy(x: side / 2 + adjustments.offsetX * 2.7, y: side / 2 + adjustments.offsetY * 2.7)
+            cgContext.rotate(by: CGFloat(adjustments.rotation * .pi / 180))
+
+            let aspectFill = max(side / size.width, side / size.height)
+            let drawWidth = size.width * aspectFill * adjustments.scale
+            let drawHeight = size.height * aspectFill * adjustments.scale
+            draw(in: CGRect(x: -drawWidth / 2, y: -drawHeight / 2, width: drawWidth, height: drawHeight))
+        }
+
+        let tuned = rendered.applyingColorControls(
+            brightness: adjustments.brightness,
+            contrast: adjustments.contrast,
+            saturation: adjustments.saturation
+        )
+        return tuned.jpegData(compressionQuality: 0.82)
+    }
+
+    func applyingColorControls(brightness: Double, contrast: Double, saturation: Double) -> UIImage {
+        guard brightness != 0 || contrast != 1 || saturation != 1,
+              let ciImage = CIImage(image: self) else {
+            return self
+        }
+
+        let filter = CIFilter.colorControls()
+        filter.inputImage = ciImage
+        filter.brightness = Float(brightness)
+        filter.contrast = Float(contrast)
+        filter.saturation = Float(saturation)
+
+        guard let output = filter.outputImage,
+              let cgImage = CIContext().createCGImage(output, from: output.extent) else {
+            return self
+        }
+        return UIImage(cgImage: cgImage, scale: scale, orientation: imageOrientation)
+    }
+}
+
 private struct StatTile: View {
     let title: String
     let value: String
@@ -4037,10 +6500,10 @@ private struct StatTile: View {
         }
         .padding(max(10.0, 12.0 * layoutScale))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AndroidLook.glassFill, in: RoundedRectangle(cornerRadius: max(16.0, 18.0 * layoutScale), style: .continuous))
+        .background(Color.white, in: RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: max(16.0, 18.0 * layoutScale), style: .continuous)
-                .stroke(AndroidLook.accentGold.opacity(0.72), lineWidth: 1)
+            RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 }
@@ -4055,32 +6518,52 @@ private struct DashboardActionLabel<Background: ShapeStyle>: View {
     let tilePadding: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: max(8.0, 10.0 * layoutScale)) {
-            Image(systemName: systemImage)
-                .font(.system(size: max(24.0, 30.0 * layoutScale), weight: .semibold))
-                .foregroundStyle(tint)
-                .frame(maxWidth: .infinity, alignment: .center)
-            Text(title)
-                .font(.system(size: max(11.0, 12.0 * layoutScale), weight: .heavy))
-                .foregroundStyle(AndroidLook.deepBrown)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .minimumScaleFactor(0.72)
+        ZStack {
+            Rectangle()
+                .fill(Color.white)
+
+            VStack(alignment: .center, spacing: max(7.0, 8.0 * layoutScale)) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(AndroidLook.lightGolden.opacity(0.34))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(AndroidLook.accentGold.opacity(0.24), lineWidth: 1)
+                        )
+                    Image(systemName: systemImage)
+                        .font(.system(size: max(22.0, 28.0 * layoutScale), weight: .semibold))
+                        .foregroundStyle(AndroidLook.accentGold)
+                }
+                .frame(width: max(48.0, 54.0 * layoutScale), height: max(48.0, 54.0 * layoutScale))
+
+                Text(title)
+                    .font(.system(size: max(12.0, 13.0 * layoutScale), weight: .heavy))
+                    .foregroundStyle(AndroidLook.deepBrown)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.72)
+
+                Text(subtitle)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(AndroidLook.mutedBrown)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            }
+            .padding(tilePadding)
         }
-        .padding(tilePadding)
-        .frame(maxWidth: .infinity, minHeight: max(94.0, 104.0 * layoutScale), alignment: .center)
-        .aspectRatio(1, contentMode: .fit)
-        .background(AndroidLook.glassFill, in: RoundedRectangle(cornerRadius: max(20.0, 24.0 * layoutScale), style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: max(104.0, 112.0 * layoutScale), alignment: .center)
+        .clipShape(RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: max(20.0, 24.0 * layoutScale), style: .continuous)
-                .strokeBorder(AndroidLook.softBrown, lineWidth: 2)
+            RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous)
+                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 }
 
 private struct MemberEditScreen: View {
     let originalMember: Member
-    let canApproveDirectly: Bool
+    let canSaveDirectly: Bool
     let language: AppLanguage
     let onSave: (Member) -> Void
     let onRequestOverride: (String) -> Void
@@ -4105,6 +6588,9 @@ private struct MemberEditScreen: View {
     @State private var landmark: String
     @State private var relationship: String
     @State private var photoURL: String
+    @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedImageData: Data?
+    @State private var photoAdjustments = CardPhotoAdjustments()
     @State private var facebookURL: String
     @State private var instagramURL: String
     @State private var youtubeURL: String
@@ -4113,14 +6599,14 @@ private struct MemberEditScreen: View {
 
     init(
         originalMember: Member,
-        canApproveDirectly: Bool,
+        canSaveDirectly: Bool,
         language: AppLanguage,
         onSave: @escaping (Member) -> Void,
         onRequestOverride: @escaping (String) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.originalMember = originalMember
-        self.canApproveDirectly = canApproveDirectly
+        self.canSaveDirectly = canSaveDirectly
         self.language = language
         self.onSave = onSave
         self.onRequestOverride = onRequestOverride
@@ -4154,7 +6640,7 @@ private struct MemberEditScreen: View {
             Form {
                 Section(localized("Basic", language: language)) {
                     TextField("Name", text: $name)
-                    TextField("Date of Birth", text: $dateOfBirth)
+                    ISODatePickerRow(title: "Date of Birth", value: $dateOfBirth, allowsClear: false)
                     TextField("Phone Number", text: $phoneNumber)
                         .keyboardType(.phonePad)
                     TextField("Email", text: $email)
@@ -4165,8 +6651,8 @@ private struct MemberEditScreen: View {
                     TextField("Spouse", text: $spouseName)
                     TextField("Father", text: $fatherName)
                     TextField("Mother", text: $motherName)
-                    TextField("Marriage Date", text: $marriageDate)
-                    TextField("Bereavement Date", text: $bereavementDate)
+                    ISODatePickerRow(title: "Marriage Date", value: $marriageDate, allowsClear: true)
+                    ISODatePickerRow(title: "Bereavement Date", value: $bereavementDate, allowsClear: true)
                     TextField("Immediate Family", text: $immediateFamily, axis: .vertical)
                     TextField("Location", text: $location)
                     TextField("Address", text: $address, axis: .vertical)
@@ -4186,7 +6672,7 @@ private struct MemberEditScreen: View {
                         }
                     }
                     TextField("Relationship", text: $relationship)
-                    if !canApproveDirectly {
+                    if !canSaveDirectly {
                         Menu {
                             ForEach(relationshipSuggestions, id: \.self) { suggestion in
                                 Button(suggestion) {
@@ -4201,21 +6687,48 @@ private struct MemberEditScreen: View {
                 }
 
                 Section(localized("Media & Social", language: language)) {
-                    TextField("Photo URL", text: $photoURL, axis: .vertical)
+                    VStack(alignment: .leading, spacing: 12) {
+                        ProfilePhotoEditor(
+                            member: originalMember,
+                            storedPhoto: photoURL,
+                            selectedImageData: selectedImageData,
+                            adjustments: photoAdjustments
+                        )
+                        .frame(maxWidth: .infinity)
+
+                        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+                            Label(hasProfilePhoto ? "Change Profile Photo" : "Choose Profile Photo", systemImage: "photo")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+
+                        PhotoEditControls(
+                            adjustments: $photoAdjustments,
+                            onReset: { photoAdjustments = CardPhotoAdjustments() }
+                        )
+                    }
+
                     TextField("Facebook URL", text: $facebookURL, axis: .vertical)
                     TextField("Instagram URL", text: $instagramURL, axis: .vertical)
                     TextField("YouTube URL", text: $youtubeURL, axis: .vertical)
                 }
 
                 Section {
-                    Text(canApproveDirectly ? "Saving will update the approved member record directly." : "Saving will submit this profile to pending updates for approval.")
+                    Text(canSaveDirectly ? "Saving will update this profile directly." : "Saving will submit this profile for admin approval.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                    if !canApproveDirectly {
+                    if !canSaveDirectly {
                         Text("If you select a relationship and save, it will be treated as a request.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                }
+            }
+            .task(id: selectedPhotoItem) {
+                guard let selectedPhotoItem else { return }
+                if let data = try? await selectedPhotoItem.loadTransferable(type: Data.self) {
+                    selectedImageData = data
+                    photoAdjustments = CardPhotoAdjustments()
                 }
             }
             .navigationTitle(localized("Edit Profile", language: language))
@@ -4240,7 +6753,7 @@ private struct MemberEditScreen: View {
                                 motherName: emptyToNil(motherName),
                                 marriageDate: emptyToNil(marriageDate),
                                 bereavementDate: emptyToNil(bereavementDate),
-                                photoURL: emptyToNil(photoURL),
+                                photoURL: finalPhotoURL(),
                                 immediateFamily: immediateFamily.trimmingCharacters(in: .whitespacesAndNewlines),
                                 address: emptyToNil(address),
                                 latitude: latitude,
@@ -4288,6 +6801,20 @@ private struct MemberEditScreen: View {
                 )
             }
         }
+    }
+
+    private func finalPhotoURL() -> String? {
+        guard let selectedImageData, let image = UIImage(data: selectedImageData) else {
+            return emptyToNil(photoURL)
+        }
+        guard let editedData = image.editedSquareJPEGData(adjustments: photoAdjustments) else {
+            return emptyToNil(photoURL)
+        }
+        return storedPhotoString(from: editedData)
+    }
+
+    private var hasProfilePhoto: Bool {
+        selectedImageData != nil || !photoURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private func emptyToNil(_ value: String) -> String? {
@@ -4345,6 +6872,46 @@ private struct SocialLinkDot: View {
     }
 }
 
+private struct ISODatePickerRow: View {
+    let title: String
+    @Binding var value: String
+    let allowsClear: Bool
+
+    private var dateBinding: Binding<Date> {
+        Binding(
+            get: {
+                Member.isoDateFormatter.date(from: value) ?? .now
+            },
+            set: { newValue in
+                value = Member.isoDateFormatter.string(from: newValue)
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                Spacer()
+                if allowsClear && !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("Clear") {
+                        value = ""
+                    }
+                    .font(.caption.weight(.semibold))
+                    .buttonStyle(.borderless)
+                }
+            }
+
+            DatePicker(
+                value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && allowsClear ? "Not set" : value,
+                selection: dateBinding,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.compact)
+        }
+    }
+}
+
 private struct MemberDetailScreen: View {
     let member: Member
     let canEdit: Bool
@@ -4359,7 +6926,9 @@ private struct MemberDetailScreen: View {
                     header
                     profileSection
                     familySection
-                    socialSection
+                    if hasSocialLinks {
+                        socialSection
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
@@ -4382,9 +6951,9 @@ private struct MemberDetailScreen: View {
         HStack(spacing: 16) {
             AvatarView(member: member, size: 72)
             VStack(alignment: .leading, spacing: 6) {
-                Text(member.name)
+                Text(profileDisplayCase(member.name) ?? member.name)
                     .font(.title2.weight(.bold))
-                Text(member.relationship ?? "No relationship set")
+                Text(profileDisplayCase(member.relationship) ?? "No relationship set")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Text(member.phoneNumber.isEmpty ? "No phone number" : member.phoneNumber)
@@ -4403,21 +6972,21 @@ private struct MemberDetailScreen: View {
                 .font(.headline)
             DetailRow(label: "DOB", value: member.dateOfBirth)
             DetailRow(label: "Email", value: member.email)
-            DetailRow(label: "Location", value: member.location)
-            DetailRow(label: "Address", value: member.address)
-            DetailRow(label: "Flat/Floor", value: [member.flatNumber, member.floor].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
-            DetailRow(label: "Landmark", value: member.landmark)
+            DetailRow(label: "Location", value: profileDisplayCase(member.location))
+            DetailRow(label: "Address", value: profileDisplayCase(member.address))
+            DetailRow(label: "Flat/Floor", value: profileDisplayCase([member.flatNumber, member.floor].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")))
+            DetailRow(label: "Landmark", value: profileDisplayCase(member.landmark))
             if let latitude = member.latitude, let longitude = member.longitude {
                 Link(destination: mapURL(latitude: latitude, longitude: longitude)) {
                     Label("View on Map", systemImage: "map")
                         .font(.subheadline.weight(.semibold))
                 }
             }
-            DetailRow(label: "Spouse", value: member.spouseName)
-            DetailRow(label: "Parents", value: [member.fatherName, member.motherName].compactMap { $0 }.joined(separator: " & "))
+            DetailRow(label: "Spouse", value: profileDisplayCase(member.spouseName))
+            DetailRow(label: "Parents", value: profileDisplayCase([member.fatherName, member.motherName].compactMap { $0 }.joined(separator: " & ")))
             DetailRow(label: "Marriage", value: member.marriageDate)
             DetailRow(label: "Bereavement", value: member.bereavementDate)
-            DetailRow(label: "Immediate Family", value: member.immediateFamily)
+            DetailRow(label: "Immediate Family", value: profileDisplayCase(member.immediateFamily))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -4433,10 +7002,10 @@ private struct MemberDetailScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Relationship")
                 .font(.headline)
-            DetailRow(label: "Global", value: member.relationship)
+            DetailRow(label: "Global", value: profileDisplayCase(member.relationship))
             if !member.manualRelationships.isEmpty {
                 ForEach(member.manualRelationships.sorted(by: { $0.key < $1.key }), id: \.key) { entry in
-                    DetailRow(label: entry.key, value: entry.value)
+                    DetailRow(label: profileDisplayCase(entry.key) ?? entry.key, value: profileDisplayCase(entry.value))
                 }
             } else {
                 Text("No manual relationship overrides yet.")
@@ -4453,13 +7022,44 @@ private struct MemberDetailScreen: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Social")
                 .font(.headline)
-            DetailRow(label: "Facebook", value: member.facebookURL)
-            DetailRow(label: "Instagram", value: member.instagramURL)
-            DetailRow(label: "YouTube", value: member.youtubeURL)
+            HStack(spacing: 10) {
+                if let url = socialURL(member.facebookURL) {
+                    socialIconLink(url: url, systemImage: "f.circle.fill", color: .blue, label: "Facebook")
+                }
+                if let url = socialURL(member.instagramURL) {
+                    socialIconLink(url: url, systemImage: "camera.circle.fill", color: .pink, label: "Instagram")
+                }
+                if let url = socialURL(member.youtubeURL) {
+                    socialIconLink(url: url, systemImage: "play.rectangle.fill", color: .red, label: "YouTube")
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
         .background(Color.black.opacity(0.04), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+
+    private var hasSocialLinks: Bool {
+        socialURL(member.facebookURL) != nil || socialURL(member.instagramURL) != nil || socialURL(member.youtubeURL) != nil
+    }
+
+    private func socialIconLink(url: URL, systemImage: String, color: Color, label: String) -> some View {
+        Link(destination: url) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(color)
+                .frame(width: 38, height: 38)
+                .background(color.opacity(0.12), in: Circle())
+        }
+        .accessibilityLabel(label)
+    }
+
+    private func socialURL(_ value: String?) -> URL? {
+        guard var string = value?.trimmingCharacters(in: .whitespacesAndNewlines), !string.isEmpty else { return nil }
+        if !string.localizedCaseInsensitiveContains("://") {
+            string = "https://\(string)"
+        }
+        return URL(string: string)
     }
 }
 
@@ -4677,9 +7277,9 @@ private struct FamilyTreeCanvas: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
-                    if treeBranches.isEmpty {
+            ScrollView([.horizontal, .vertical]) {
+                LazyVStack(alignment: .center, spacing: 28) {
+                    if rootMembers.isEmpty {
                         ContentUnavailableView(
                             "Family Tree",
                             systemImage: "tree",
@@ -4687,20 +7287,22 @@ private struct FamilyTreeCanvas: View {
                         )
                         .frame(maxWidth: .infinity, minHeight: 360)
                     } else {
-                        ForEach(treeBranches) { branch in
-                            FamilyTreeBranchGrid(
-                                branch: branch,
+                        ForEach(rootMembers) { root in
+                            RecursiveFamilyNode(
+                                member: root,
+                                members: displayMembers,
                                 currentUserId: currentUser?.id,
                                 focusedId: focusedId,
+                                expandedIds: $expandedIds,
                                 onMemberTap: handleMemberTap
                             )
                         }
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 18)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 24)
                 .scaleEffect(scale)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(minWidth: 760, minHeight: 560, alignment: .top)
             }
             .background(Color(red: 0.94, green: 0.92, blue: 0.88))
             .overlay(alignment: .top) {
@@ -4741,29 +7343,31 @@ private struct FamilyTreeCanvas: View {
         }
     }
 
-    private var treeBranches: [FamilyTreeBranch] {
-        let displayMembers = members
+    private var displayMembers: [Member] {
+        members
             .filter { !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             .sorted { lhs, rhs in
                 let comparison = lhs.familyId.localizedStandardCompare(rhs.familyId)
                 return comparison == .orderedSame ? lhs.name < rhs.name : comparison == .orderedAscending
             }
-        let grouped = Dictionary(grouping: displayMembers, by: branchKey(for:))
+    }
 
-        return grouped.keys.sorted().map { key in
-            FamilyTreeBranch(id: key, title: branchTitle(for: key), members: grouped[key] ?? [])
+    private var rootMembers: [Member] {
+        let nonSpouseMembers = displayMembers.filter { !$0.familyId.hasSuffix("0") }
+        if let primaryRoot = nonSpouseMembers.first(where: { $0.familyId == "P" }) {
+            return [primaryRoot]
+        }
+
+        return nonSpouseMembers.filter { member in
+            let parentBase = parentBaseId(for: member.familyId)
+            return parentBase.isEmpty || !displayMembers.contains { $0.familyId == parentBase }
         }
     }
 
-    private func branchKey(for member: Member) -> String {
-        let trimmed = member.familyId.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let first = trimmed.first else { return "#" }
-        let key = String(first).uppercased()
-        return key == "P" && trimmed.count > 1 ? String(trimmed.dropFirst().first ?? first).uppercased() : key
-    }
-
-    private func branchTitle(for key: String) -> String {
-        key == "#" ? "Family" : "Family \(key)"
+    private func parentBaseId(for familyId: String) -> String {
+        let base = familyId.hasSuffix("0") ? String(familyId.dropLast()) : familyId
+        guard !base.isEmpty, base != "P" else { return "" }
+        return base.count == 1 ? "P" : String(base.dropLast())
     }
 
     private var treeToolbar: some View {
@@ -4998,6 +7602,12 @@ private struct RecursiveFamilyNode: View {
 
             if !children.isEmpty && isExpanded {
                 TreeConnector(horizontal: false, length: 32)
+                Text("Children")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(AndroidLook.mutedBrown)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.white.opacity(0.72), in: Capsule())
 
                 HStack(alignment: .top, spacing: 26) {
                     ForEach(children) { child in
@@ -5133,7 +7743,10 @@ private struct TreeMemberCard: View {
         if let relationship = member.relationship, !relationship.isEmpty {
             return relationship
         }
-        return member.familyId.isEmpty ? "Relationship not set" : member.familyId
+        if member.familyId.hasSuffix("0") {
+            return "Spouse"
+        }
+        return "Family member"
     }
 }
 

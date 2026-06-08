@@ -64,7 +64,7 @@ struct Milestone: Identifiable, Equatable {
     let comments: [PostComment]
 }
 
-enum DiscussionKind: String, Equatable {
+enum DiscussionKind: String, Equatable, Hashable {
     case text = "TEXT"
     case image = "IMAGE"
     case poll = "POLL"
@@ -214,6 +214,20 @@ struct GameSession: Identifiable, Equatable {
     let gameState: [String: Any]
     let winnerId: String?
     let lastUpdated: Int64
+
+    var isFull: Bool {
+        players.count >= 2
+    }
+
+    func isParticipant(_ userID: String?) -> Bool {
+        guard let userID else { return false }
+        return players.contains(userID)
+    }
+
+    func canJoin(_ userID: String?) -> Bool {
+        guard let userID else { return false }
+        return status == "WAITING" && !isFull && !players.contains(userID)
+    }
 
     static func == (lhs: GameSession, rhs: GameSession) -> Bool {
         lhs.id == rhs.id

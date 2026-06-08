@@ -19,6 +19,12 @@ enum AppScreen: Equatable {
     case gameLobby(gameType: FamilyGameType)
     case gameSession(sessionID: String)
     case notifications
+    case aiCardGenerator(memberID: String, eventType: DashboardFamilyEvent.EventType)
+    case emergency
+    case businessDirectory
+    case achievements
+    case activityLog
+    case loginLog
 }
 
 enum AppLanguage: String, CaseIterable {
@@ -49,6 +55,20 @@ struct DashboardFamilyEvent: Identifiable, Equatable {
     let daysUntil: Int
 }
 
+struct CommunityAchievement: Identifiable, Equatable {
+    let id: String
+    let memberName: String
+    let memberId: String?
+    let title: String
+    let description: String
+    let date: String
+    let location: String
+    let mapsLink: String
+    let imageURL: String
+    let timestamp: Date
+    let addedBy: String
+}
+
 @MainActor
 @Observable
 final class AppViewModel {
@@ -57,6 +77,7 @@ final class AppViewModel {
         static let timestampKey = "CircleBirthdays.session.timestamp"
         static let duration: TimeInterval = 10 * 24 * 60 * 60
         static let languageKey = "CircleBirthdays.session.language"
+        static let treeIDKey = "CircleBirthdays.session.currentTreeID"
     }
 
     private let memberRepository: MemberRepository
@@ -76,6 +97,7 @@ final class AppViewModel {
     var activeGameSessions: [GameSession] = []
     var currentGameSession: GameSession?
     var notifications: [AppNotification] = []
+    var communityAchievements: [CommunityAchievement] = []
     var currentUser: Member?
     var currentScreen: AppScreen = .login
     var isLoading = false
@@ -85,6 +107,7 @@ final class AppViewModel {
     var repositoryStatus = FirebaseBootstrap.statusText
     var lastInboxRefreshAt: Date?
     var language: AppLanguage = UserDefaults.standard.string(forKey: SessionStore.languageKey).flatMap(AppLanguage.init(rawValue:)) ?? .english
+    var currentTreeId: String = UserDefaults.standard.string(forKey: SessionStore.treeIDKey) ?? "primary"
     private var pushTokenObserver: NSObjectProtocol?
     private var inboxRefreshTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
@@ -105,14 +128,14 @@ final class AppViewModel {
     }
 
     var todayBirthdays: [Member] {
-        activeMembers.filter { member in
+        dashboardActiveMembers.filter { member in
             guard let days = member.daysUntilBirthday() else { return false }
             return days == 0
         }
     }
 
     var upcomingBirthdays: [Member] {
-        activeMembers
+        dashboardActiveMembers
             .filter { member in
                 guard let days = member.daysUntilBirthday() else { return false }
                 return days <= 30
@@ -132,14 +155,42 @@ final class AppViewModel {
         members.filter { !$0.isDeceased && $0.status == "APPROVED" }
     }
 
+    var dashboardActiveMembers: [Member] {
+        activeMembers.filter { member in
+            currentTreeId == "primary"
+                ? (member.treeId.isEmpty || member.treeId == "primary" || member.isPrimaryTree)
+                : member.treeId == currentTreeId || member.id == currentTreeId
+        }
+    }
+
+    var canSwitchTreeView: Bool {
+        currentUser?.secondaryTreeEnabled == true
+    }
+
     var approvedMembers: [Member] {
         members.filter { $0.status == "APPROVED" }
     }
 
+    var dashboardApprovedMembers: [Member] {
+        approvedMembers.filter { member in
+            currentTreeId == "primary"
+                ? (member.treeId.isEmpty || member.treeId == "primary" || member.isPrimaryTree)
+                : member.treeId == currentTreeId || member.id == currentTreeId
+        }
+    }
+
+    var dashboardMembersIncludingPending: [Member] {
+        (members + pendingMembers).filter { member in
+            currentTreeId == "primary"
+                ? (member.treeId.isEmpty || member.treeId == "primary" || member.isPrimaryTree)
+                : member.treeId == currentTreeId || member.id == currentTreeId
+        }
+    }
+
     var visibleMembers: [Member] {
         let resolved = FamilyUtils.populateAllLinks(
-            members: approvedMembers,
-            allMembers: members + pendingMembers,
+            members: dashboardApprovedMembers,
+            allMembers: dashboardMembersIncludingPending,
             currentUser: currentUser
         )
         let source = searchText.isEmpty ? resolved : resolved.filter { $0.matches(searchText: searchText) }
@@ -152,24 +203,32 @@ final class AppViewModel {
     }
 
     var pendingCount: Int {
-        pendingMembers.count
+        dashboardPendingMembers.count
+    }
+
+    var dashboardPendingMembers: [Member] {
+        pendingMembers.filter { member in
+            currentTreeId == "primary"
+                ? (member.treeId.isEmpty || member.treeId == "primary" || member.isPrimaryTree)
+                : member.treeId == currentTreeId || member.id == currentTreeId
+        }
     }
 
     var resolvedPendingMembers: [Member] {
         FamilyUtils.populateAllLinks(
-            members: pendingMembers,
-            allMembers: members + pendingMembers,
+            members: dashboardPendingMembers,
+            allMembers: dashboardMembersIncludingPending,
             currentUser: currentUser
         )
     }
 
     var approvedMemories: [MemoryPost] {
-        let isAdmin = currentUser?.isAdmin == true
+        let isAdmin = hasAdminPrivileges
         return memories.filter { isAdmin || $0.status == "APPROVED" }
     }
 
     var visibleDiscussions: [DiscussionThread] {
-        let isAdmin = currentUser?.isAdmin == true
+        let isAdmin = hasAdminPrivileges
         return discussions.filter { isAdmin || $0.status == "APPROVED" }
     }
 
@@ -203,6 +262,15 @@ final class AppViewModel {
 
     var visibleRecipes: [Recipe] {
         recipes.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var hasAdminPrivileges: Bool {
+        isPrimaryAdminLogin
+    }
+
+    var isPrimaryAdminLogin: Bool {
+        guard let currentUser else { return false }
+        return Self.normalizePhoneNumber(currentUser.phoneNumber) == "9999999999"
     }
 
     var visibleTraditions: [Tradition] {
@@ -248,11 +316,11 @@ final class AppViewModel {
     private func familyEvents(withinDays limit: Int, referenceDate: Date = .now) -> [DashboardFamilyEvent] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: referenceDate)
-        let remembranceMembers = currentUser?.isAdmin == true ? members + pendingMembers : approvedMembers
+        let remembranceMembers = hasAdminPrivileges ? dashboardMembersIncludingPending : dashboardApprovedMembers
         var events: [DashboardFamilyEvent] = []
         var anniversaryKeys = Set<String>()
 
-        for member in activeMembers {
+        for member in dashboardActiveMembers {
             if let event = recurringEvent(
                 for: member,
                 sourceDate: member.dateOfBirth,
@@ -265,6 +333,7 @@ final class AppViewModel {
             }
 
             if let marriageDate = member.marriageDate,
+               isActiveAnniversaryMember(member),
                let event = recurringEvent(
                     for: member,
                     sourceDate: marriageDate,
@@ -338,6 +407,21 @@ final class AppViewModel {
             return String(familyId.dropLast())
         }
         return familyId
+    }
+
+    private func isActiveAnniversaryMember(_ member: Member) -> Bool {
+        guard !member.isDeceased else { return false }
+        guard let partner = anniversaryPartner(for: member) else { return true }
+        return !partner.isDeceased
+    }
+
+    private func anniversaryPartner(for member: Member) -> Member? {
+        let partnerId = partnerFamilyId(for: member.familyId)
+        return dashboardMembersIncludingPending.first { $0.familyId == partnerId }
+    }
+
+    private func partnerFamilyId(for familyId: String) -> String {
+        familyId.hasSuffix("0") ? String(familyId.dropLast()) : familyId + "0"
     }
 
     private func parseFlexibleDate(_ string: String, calendar: Calendar) -> Date? {
@@ -458,6 +542,9 @@ final class AppViewModel {
         }
 
         currentUser = user
+        if !user.secondaryTreeEnabled, currentTreeId != "primary" {
+            switchTree("primary")
+        }
         currentScreen = .dashboard
         saveSession(for: user)
         syncCurrentUserPushToken()
@@ -482,6 +569,11 @@ final class AppViewModel {
     func toggleLanguage() {
         language = language == .english ? .hindi : .english
         UserDefaults.standard.set(language.rawValue, forKey: SessionStore.languageKey)
+    }
+
+    func switchTree(_ treeId: String) {
+        currentTreeId = treeId.isEmpty ? "primary" : treeId
+        UserDefaults.standard.set(currentTreeId, forKey: SessionStore.treeIDKey)
     }
 
     func showDashboard() {
@@ -534,6 +626,72 @@ final class AppViewModel {
         }
     }
 
+    func showAICardGenerator(for member: Member, eventType: DashboardFamilyEvent.EventType) {
+        currentScreen = .aiCardGenerator(memberID: member.id, eventType: eventType)
+    }
+
+    func showNearestAICardGenerator() {
+        let eligible = (todayEvents + upcomingEvents)
+            .filter { $0.type == .birthday || $0.type == .anniversary }
+            .sorted { $0.daysUntil < $1.daysUntil }
+
+        guard let event = eligible.first else {
+            errorMessage = "No birthday or anniversary is coming up this week."
+            return
+        }
+
+        showAICardGenerator(for: event.member, eventType: event.type)
+    }
+
+    func showBusinessDirectory() {
+        currentScreen = .businessDirectory
+    }
+
+    func showEmergency() {
+        currentScreen = .emergency
+    }
+
+    func showAchievements() {
+        currentScreen = .achievements
+    }
+
+    func saveAchievement(_ achievement: CommunityAchievement) {
+        let finalAchievement = CommunityAchievement(
+            id: achievement.id.isEmpty ? UUID().uuidString : achievement.id,
+            memberName: achievement.memberName,
+            memberId: achievement.memberId,
+            title: achievement.title,
+            description: achievement.description,
+            date: achievement.date,
+            location: achievement.location,
+            mapsLink: achievement.mapsLink,
+            imageURL: achievement.imageURL,
+            timestamp: achievement.timestamp,
+            addedBy: currentUser?.id ?? achievement.addedBy
+        )
+
+        if let index = communityAchievements.firstIndex(where: { $0.id == finalAchievement.id }) {
+            communityAchievements[index] = finalAchievement
+        } else {
+            communityAchievements.insert(finalAchievement, at: 0)
+        }
+    }
+
+    func deleteAchievement(_ achievement: CommunityAchievement) {
+        guard hasAdminPrivileges || achievement.addedBy == currentUser?.id else { return }
+        communityAchievements.removeAll { $0.id == achievement.id }
+    }
+
+    func showActivityLog() {
+        guard isPrimaryAdminLogin else { return }
+        currentScreen = .activityLog
+    }
+
+    func showLoginLog() {
+        guard isPrimaryAdminLogin else { return }
+        currentScreen = .loginLog
+    }
+
     func showFamilyGames() {
         currentScreen = .familyGames
         Task {
@@ -567,10 +725,14 @@ final class AppViewModel {
 
     func canEdit(_ member: Member) -> Bool {
         guard let currentUser else { return false }
-        return currentUser.isAdmin
+        return isPrimaryAdminLogin
             || currentUser.isEditor
             || currentUser.id == member.id
-            || isFamilyProfileBelow(member, currentUser: currentUser)
+    }
+
+    func savesMemberEditsDirectly(_ member: Member) -> Bool {
+        guard let currentUser else { return false }
+        return isPrimaryAdminLogin || currentUser.isEditor || currentUser.id == member.id
     }
 
     private func isFamilyProfileBelow(_ member: Member, currentUser: Member) -> Bool {
@@ -963,6 +1125,27 @@ final class AppViewModel {
         }
     }
 
+    func saveDiscussion(_ discussion: DiscussionThread) async {
+        do {
+            try await socialRepository.submitDiscussion(discussion)
+            if let index = discussions.firstIndex(where: { $0.id == discussion.id }) {
+                discussions[index] = discussion
+            } else {
+                discussions.append(discussion)
+            }
+            let recipients = activeMembers.map(\.id).filter { $0 != discussion.userId }
+            await PushNotificationCoordinator.shared.queueNotification(
+                title: "New discussion",
+                body: discussion.title,
+                recipientIDs: recipients,
+                category: "discussion",
+                referenceID: discussion.id
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func saveMilestone(_ milestone: Milestone) async {
         do {
             try await socialRepository.submitMilestone(milestone)
@@ -1095,7 +1278,9 @@ final class AppViewModel {
     func saveMemberEdits(_ member: Member) async {
         guard let currentUser else { return }
 
-        let savesDirectly = currentUser.isAdmin || currentUser.isEditor
+        guard canEdit(member) else { return }
+
+        let savesDirectly = savesMemberEditsDirectly(member)
         let existingMember = (members + pendingMembers).first { $0.id == member.id }
         let relationshipRequested = !savesDirectly && member.relationship != existingMember?.relationship
         let finalMember = Member(
@@ -1202,7 +1387,7 @@ final class AppViewModel {
             milestones = try await milestonesTask
             activeGameSessions = (try? await socialRepository.fetchActiveGameSessions()) ?? []
             if let currentUser {
-                notifications = (try? await socialRepository.fetchNotifications(userID: currentUser.id, isAdmin: currentUser.isAdmin)) ?? []
+                notifications = (try? await socialRepository.fetchNotifications(userID: currentUser.id, isAdmin: isPrimaryAdminLogin)) ?? []
             }
             await refreshInbox(showErrors: showErrors)
 
@@ -1245,12 +1430,12 @@ final class AppViewModel {
         }
 
         do {
-            notifications = try await socialRepository.fetchNotifications(userID: currentUser.id, isAdmin: currentUser.isAdmin)
+            notifications = try await socialRepository.fetchNotifications(userID: currentUser.id, isAdmin: isPrimaryAdminLogin)
         } catch {
             if FirebaseBootstrap.isConfigured && showErrors {
                 errorMessage = error.localizedDescription
             } else {
-                notifications = (try? await MockSocialRepository().fetchNotifications(userID: currentUser.id, isAdmin: currentUser.isAdmin)) ?? []
+                notifications = (try? await MockSocialRepository().fetchNotifications(userID: currentUser.id, isAdmin: isPrimaryAdminLogin)) ?? []
             }
         }
     }
@@ -1307,6 +1492,108 @@ final class AppViewModel {
         }
     }
 
+    func resetPassword(for member: Member, to newPassword: String = "1234") async {
+        guard hasAdminPrivileges else { return }
+        let trimmed = newPassword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        do {
+            let hashed = Self.sha256(trimmed)
+            try await memberRepository.updatePassword(userID: member.id, passwordHash: hashed)
+            replaceLocalMember(adminUpdatedMember(member, password: hashed))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func removePhoto(for member: Member) async {
+        guard hasAdminPrivileges else { return }
+        let updated = adminUpdatedMember(member, photoURL: nil, clearsPhoto: true)
+
+        do {
+            try await memberRepository.saveMember(updated, toPending: false)
+            replaceLocalMember(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func removeMember(_ member: Member) async {
+        guard hasAdminPrivileges, member.id != currentUser?.id else { return }
+        let updated = adminUpdatedMember(member, status: "REMOVED")
+
+        do {
+            try await memberRepository.saveMember(updated, toPending: false)
+            replaceLocalMember(updated)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func replaceLocalMember(_ member: Member) {
+        if let index = members.firstIndex(where: { $0.id == member.id }) {
+            members[index] = member
+        }
+        if let index = pendingMembers.firstIndex(where: { $0.id == member.id }) {
+            pendingMembers[index] = member
+        }
+        if currentUser?.id == member.id {
+            currentUser = member
+        }
+    }
+
+    private func adminUpdatedMember(
+        _ member: Member,
+        photoURL: String? = nil,
+        clearsPhoto: Bool = false,
+        status: String? = nil,
+        password: String? = nil
+    ) -> Member {
+        Member(
+            id: member.id,
+            familyId: member.familyId,
+            name: member.name,
+            gender: member.gender,
+            dateOfBirth: member.dateOfBirth,
+            phoneNumber: member.phoneNumber,
+            email: member.email,
+            location: member.location,
+            spouseName: member.spouseName,
+            fatherName: member.fatherName,
+            motherName: member.motherName,
+            marriageDate: member.marriageDate,
+            bereavementDate: member.bereavementDate,
+            photoURL: clearsPhoto ? nil : (photoURL ?? member.photoURL),
+            immediateFamily: member.immediateFamily,
+            address: member.address,
+            latitude: member.latitude,
+            longitude: member.longitude,
+            flatNumber: member.flatNumber,
+            floor: member.floor,
+            landmark: member.landmark,
+            password: password ?? member.password,
+            isAdmin: member.isAdmin,
+            isEditor: member.isEditor,
+            isPrimaryTree: member.isPrimaryTree,
+            secondaryTreeEnabled: member.secondaryTreeEnabled,
+            treeId: member.treeId,
+            status: status ?? member.status,
+            lastLoggedIn: member.lastLoggedIn,
+            relationship: member.relationship,
+            fcmToken: member.fcmToken,
+            facebookURL: member.facebookURL,
+            instagramURL: member.instagramURL,
+            youtubeURL: member.youtubeURL,
+            manualRelationships: member.manualRelationships,
+            requestedBy: member.requestedBy,
+            requestedByName: member.requestedByName,
+            requestedRelationship: member.requestedRelationship,
+            points: member.points,
+            level: member.level,
+            badges: member.badges
+        )
+    }
+
     func refreshGameSessions() async {
         do {
             activeGameSessions = try await socialRepository.fetchActiveGameSessions()
@@ -1343,12 +1630,18 @@ final class AppViewModel {
     func joinGameSession(_ session: GameSession) async {
         guard let currentUser else { return }
         do {
-            try await socialRepository.joinGameSession(sessionID: session.id, player: currentUser)
+            if session.canJoin(currentUser.id) {
+                try await socialRepository.joinGameSession(sessionID: session.id, player: currentUser)
+            }
             await refreshGameSessions()
             openGame(sessionID: session.id)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func openGameSession(_ session: GameSession) {
+        openGame(sessionID: session.id)
     }
 
     func updateGameState(sessionID: String, state: [String: Any], nextTurnID: String?, winnerID: String? = nil) async {

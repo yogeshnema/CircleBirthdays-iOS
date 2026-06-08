@@ -23,6 +23,7 @@ struct AddressPickerView: View {
     @State private var searchResults: [MKMapItem] = []
     @State private var isResolving = false
     @State private var statusMessage: String?
+    @State private var shouldIgnoreNextCameraChange: Bool
     @State private var locationManager = LocationPermissionManager()
 
     init(
@@ -38,10 +39,17 @@ struct AddressPickerView: View {
         self.onSelect = onSelect
         self.onCancel = onCancel
 
-        let coordinate = initialCoordinate ?? CLLocationCoordinate2D(latitude: 18.5204, longitude: 73.8567)
+        let trimmedInitialAddress = initialAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackCoordinate = CLLocationCoordinate2D(latitude: 22.9734, longitude: 78.6569)
+        let coordinate = initialCoordinate ?? fallbackCoordinate
+        let span = initialCoordinate == nil
+            ? MKCoordinateSpan(latitudeDelta: trimmedInitialAddress.isEmpty ? 18.0 : 8.0, longitudeDelta: trimmedInitialAddress.isEmpty ? 18.0 : 8.0)
+            : MKCoordinateSpan(latitudeDelta: 0.015, longitudeDelta: 0.015)
         _selectedAddress = State(initialValue: initialAddress)
         _selectedCoordinate = State(initialValue: initialCoordinate)
-        _cameraPosition = State(initialValue: .region(MKCoordinateRegion(center: coordinate, span: MKCoordinateSpan(latitudeDelta: 0.015, longitudeDelta: 0.015))))
+        _cameraPosition = State(initialValue: .region(MKCoordinateRegion(center: coordinate, span: span)))
+        _searchText = State(initialValue: trimmedInitialAddress)
+        _shouldIgnoreNextCameraChange = State(initialValue: true)
     }
 
     var body: some View {
@@ -62,6 +70,12 @@ struct AddressPickerView: View {
                         MapCompass()
                     }
                     .onMapCameraChange(frequency: .onEnd) { context in
+                        if shouldIgnoreNextCameraChange {
+                            shouldIgnoreNextCameraChange = false
+                            return
+                        }
+
+                        guard !isResolving else { return }
                         selectedCoordinate = context.region.center
                         Task {
                             await reverseGeocode(context.region.center)
@@ -91,7 +105,7 @@ struct AddressPickerView: View {
             .onChange(of: locationManager.currentLocation) { _, newLocation in
                 guard let coordinate = newLocation?.coordinate else { return }
                 selectedCoordinate = coordinate
-                cameraPosition = .region(MKCoordinateRegion(center: coordinate, span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
+                moveCamera(to: coordinate)
                 Task {
                     await reverseGeocode(coordinate)
                 }
@@ -209,7 +223,6 @@ struct AddressPickerView: View {
 
     private func resolveInitialAddressIfNeeded() async {
         guard initialCoordinate == nil, !initialAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        searchText = initialAddress
         await searchLocation(shouldPopulateResults: false)
     }
 
@@ -223,7 +236,7 @@ struct AddressPickerView: View {
 
         let request = MKLocalSearch.Request()
         request.naturalLanguageQuery = query
-        if let selectedCoordinate {
+        if shouldPopulateResults, let selectedCoordinate {
             request.region = MKCoordinateRegion(center: selectedCoordinate, span: MKCoordinateSpan(latitudeDelta: 0.35, longitudeDelta: 0.35))
         }
 
@@ -244,9 +257,14 @@ struct AddressPickerView: View {
         let coordinate = item.placemark.coordinate
         selectedCoordinate = coordinate
         selectedAddress = formattedAddress(from: item.placemark)
-        cameraPosition = .region(MKCoordinateRegion(center: coordinate, span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
+        moveCamera(to: coordinate)
         searchResults = []
         statusMessage = nil
+    }
+
+    private func moveCamera(to coordinate: CLLocationCoordinate2D) {
+        shouldIgnoreNextCameraChange = true
+        cameraPosition = .region(MKCoordinateRegion(center: coordinate, span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)))
     }
 
     private func reverseGeocode(_ coordinate: CLLocationCoordinate2D) async {

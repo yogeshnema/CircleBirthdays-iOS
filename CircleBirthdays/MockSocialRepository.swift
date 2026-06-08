@@ -56,6 +56,8 @@ struct MockSocialRepository: SocialRepository {
         ""
     }
 
+    func submitDiscussion(_ discussion: DiscussionThread) async throws {}
+
     func submitMemory(_ memory: MemoryPost) async throws {}
 
     func deleteMemory(memoryID: String) async throws {}

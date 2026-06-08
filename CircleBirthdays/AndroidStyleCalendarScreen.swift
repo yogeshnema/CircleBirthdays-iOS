@@ -218,6 +218,7 @@ struct TodayPanchangTile: View {
     private func monthStart(for date: Date) -> Date {
         calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
     }
+
 }
 
 struct AndroidStyleCalendarScreen: View {
@@ -231,26 +232,24 @@ struct AndroidStyleCalendarScreen: View {
     }
 
     var body: some View {
-        let selected = calendar.startOfDay(for: selectedDate)
-        let selectedMonth = monthStart(for: selected)
-        let panchangMap = PanchangGenerator.monthData(for: selectedMonth, calendar: calendar, language: viewModel.language)
-        let selectedPanchang = panchangMap[selected]
-        let selectedEvents = familyEvents(on: selectedDate)
+        let eventSnapshot = calendarEventSnapshot(selectedDate: selectedDate, upcomingDays: 14)
+        let selectedEvents = eventSnapshot.events(on: selectedDate)
 
         CalendarBackground {
             NavigationStack {
                 ScrollView {
-                    VStack(spacing: 14) {
-                        daySelector(selected)
-
-                        selectedDetails(date: selectedDate, panchang: selectedPanchang, events: selectedEvents)
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        daySelector(selectedDate)
+                        weekStrip(centeredOn: selectedDate, eventSnapshot: eventSnapshot)
+                        selectedEventsCard(date: selectedDate, events: selectedEvents)
+                        upcomingEventsCard(events: eventSnapshot.upcomingEvents)
                     }
                     .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 14)
                     .frame(maxWidth: 620, alignment: .top)
                     .frame(maxWidth: .infinity)
                 }
-                .navigationTitle(viewModel.language == .hindi ? "हिंदू कैलेंडर" : "Hindu Calendar")
+                .navigationTitle(viewModel.language == .hindi ? "कैलेंडर" : "Calendar")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
@@ -287,10 +286,10 @@ struct AndroidStyleCalendarScreen: View {
                 VStack(spacing: 4) {
                     Text(date.formatted(.dateTime.weekday(.wide)))
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Color.white.opacity(0.68))
                     Text(date.formatted(.dateTime.day().month(.wide).year()))
                         .font(.title3.weight(.bold))
-                        .foregroundStyle(Color.brown)
+                        .foregroundStyle(.white)
                 }
 
                 Spacer()
@@ -318,11 +317,209 @@ struct AndroidStyleCalendarScreen: View {
             .buttonStyle(.bordered)
         }
         .padding(14)
-        .background(.white.opacity(0.88), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .foregroundStyle(.white)
+        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func weekStrip(centeredOn date: Date, eventSnapshot: CalendarEventSnapshot) -> some View {
+        let dates = (-3...3).compactMap { offset in
+            calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: date))
+        }
+
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+                ForEach(dates, id: \.self) { date in
+                    dayPill(date, eventSnapshot: eventSnapshot)
+                }
+            }
+            .padding(.horizontal, 2)
+        }
+    }
+
+    private func dayPill(_ date: Date, eventSnapshot: CalendarEventSnapshot) -> some View {
+        let isSelected = calendar.isDate(date, inSameDayAs: selectedDate)
+        let isToday = calendar.isDateInToday(date)
+        let hasEvents = eventSnapshot.hasEvents(on: date)
+
+        return Button {
+            selectedDate = calendar.startOfDay(for: date)
+        } label: {
+            VStack(spacing: 5) {
+                Text(date.formatted(.dateTime.weekday(.abbreviated)))
+                    .font(.caption2.weight(.bold))
+                Text("\(calendar.component(.day, from: date))")
+                    .font(.headline.weight(.heavy))
+                if hasEvents {
+                    Circle()
+                        .fill(isSelected ? Color.black.opacity(0.72) : Color.yellow)
+                        .frame(width: 6, height: 6)
+                } else {
+                    Circle()
+                        .fill(Color.clear)
+                        .frame(width: 6, height: 6)
+                }
+            }
+            .frame(width: 58, height: 72)
+            .foregroundStyle(isSelected ? .black : .white)
+            .background(
+                isSelected ? Color.yellow.opacity(0.86) : (isToday ? Color.white.opacity(0.20) : Color.white.opacity(0.12)),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(isToday || isSelected ? Color.yellow.opacity(0.85) : Color.white.opacity(0.14), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func selectedEventsCard(date: Date, events: [CalendarFamilyEvent]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.yellow)
+                    .frame(width: 8, height: 8)
+                Text(calendar.isDateInToday(date) ? (viewModel.language == .hindi ? "आज के कार्यक्रम" : "Today's Events") : date.formatted(.dateTime.day().month(.abbreviated).weekday(.wide)))
+                    .font(.headline.weight(.heavy))
+                    .foregroundStyle(.white)
+            }
+
+            if events.isEmpty {
+                Text(viewModel.language == .hindi ? "इस दिन कोई पारिवारिक कार्यक्रम नहीं है।" : "No family events for this day.")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(events) { event in
+                    calendarEventRow(event: event, date: date, showsDate: false)
+                }
+            }
+        }
+        .padding(14)
+        .calendarGlassCard()
+    }
+
+    private func upcomingEventsCard(events: [UpcomingCalendarEvent]) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.yellow)
+                    .frame(width: 8, height: 8)
+                Text(viewModel.language == .hindi ? "आने वाले कार्यक्रम" : "Coming Up")
+                    .font(.headline.weight(.heavy))
+                    .foregroundStyle(.white)
+            }
+
+            if events.isEmpty {
+                Text(viewModel.language == .hindi ? "अगले 14 दिनों में कोई कार्यक्रम नहीं।" : "No events in the next 14 days.")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.72))
+                    .padding(.vertical, 10)
+            } else {
+                ForEach(events.prefix(8)) { item in
+                    calendarEventRow(event: item.event, date: item.date, showsDate: true)
+                }
+            }
+        }
+        .padding(14)
+        .calendarGlassCard()
+    }
+
+    private func calendarEventRow(event: CalendarFamilyEvent, date: Date, showsDate: Bool) -> some View {
+        HStack(spacing: 12) {
+            CalendarAvatar(member: event.member)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(event.member.name)
+                    .font(.subheadline.weight(.heavy))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                Text(event.label(language: viewModel.language))
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.yellow.opacity(0.88))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if showsDate {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(relativeDayText(for: date))
+                        .font(.subheadline.weight(.heavy))
+                        .foregroundStyle(.white)
+                    Text(date.formatted(.dateTime.day().month(.abbreviated)))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.white.opacity(0.70))
+                }
+            }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.14), lineWidth: 1)
+        )
+    }
+
+    private func relativeDayText(for date: Date) -> String {
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: .now), to: calendar.startOfDay(for: date)).day ?? 0
+        switch days {
+        case 0:
+            return viewModel.language == .hindi ? "आज" : "Today"
+        case 1:
+            return viewModel.language == .hindi ? "कल" : "Tomorrow"
+        default:
+            return viewModel.language == .hindi ? "\(days) दिन" : "\(days) days"
+        }
     }
 
     private func moveSelectedDate(by days: Int) {
         selectedDate = calendar.startOfDay(for: calendar.date(byAdding: .day, value: days, to: selectedDate) ?? selectedDate)
+    }
+
+    private func monthOverview(month: Date, panchangMap: [Date: PanchangDay]) -> some View {
+        VStack(spacing: 10) {
+            HStack {
+                Button {
+                    moveMonth(by: -1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .frame(width: 34, height: 34)
+
+                Spacer()
+
+                Text(month.formatted(.dateTime.month(.wide).year()))
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Spacer()
+
+                Button {
+                    moveMonth(by: 1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .frame(width: 34, height: 34)
+            }
+
+            weekdayHeader
+            monthGrid(month: month, panchangMap: panchangMap)
+        }
+        .padding(12)
+        .foregroundStyle(.white)
+        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+    }
+
+    private func moveMonth(by months: Int) {
+        selectedDate = calendar.startOfDay(for: calendar.date(byAdding: .month, value: months, to: selectedDate) ?? selectedDate)
     }
 
     private var weekdayHeader: some View {
@@ -330,7 +527,7 @@ struct AndroidStyleCalendarScreen: View {
             ForEach(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], id: \.self) { symbol in
                 Text(symbol)
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.brown.opacity(0.72))
+                    .foregroundStyle(Color.white.opacity(0.72))
                     .frame(maxWidth: .infinity)
             }
         }
@@ -359,21 +556,33 @@ struct AndroidStyleCalendarScreen: View {
         let anniversaries = anniversaryMembers(on: date)
         let punyaTithis = punyaTithiMembers(on: date)
         let hasFamilyEvent = !birthdays.isEmpty || !anniversaries.isEmpty || !punyaTithis.isEmpty
+        let isPanchak = panchang?.isPanchak == true
+        let cellFill: Color = if isSelected {
+            Color.yellow.opacity(0.70)
+        } else if isPanchak {
+            Color.red.opacity(0.18)
+        } else if isToday {
+            Color.white.opacity(0.20)
+        } else {
+            Color.white.opacity(0.12)
+        }
+        let cellStroke = isToday ? Color.yellow.opacity(0.82) : Color.white.opacity(0.12)
+        let dayForeground: Color = isSelected ? .black : (isPanchak ? .red : .white)
 
         return Button {
             selectedDate = calendar.startOfDay(for: date)
         } label: {
             ZStack(alignment: .topLeading) {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(isSelected ? Color.brown : (panchang?.isPanchak == true ? Color.red.opacity(0.10) : (isToday ? Color.brown.opacity(0.10) : Color.white.opacity(0.92))))
+                    .fill(cellFill)
                     .overlay(
                         RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .stroke(isToday ? Color.brown : Color.clear, lineWidth: 1)
+                            .stroke(cellStroke, lineWidth: 1)
                     )
 
                 Text("\(calendar.component(.day, from: date))")
                     .font(.system(size: 11, weight: .black))
-                    .foregroundStyle(isSelected ? .white : (panchang?.isPanchak == true ? .red : Color.brown))
+                    .foregroundStyle(dayForeground)
                     .padding(4)
 
                 if panchang?.festivals.isEmpty == false {
@@ -395,7 +604,7 @@ struct AndroidStyleCalendarScreen: View {
                 if let panchang {
                     Text(panchang.tithiShort)
                         .font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(isSelected ? .white.opacity(0.9) : (panchang.isPanchak ? .red : Color.brown.opacity(0.82)))
+                        .foregroundStyle(isSelected ? .black.opacity(0.78) : (panchang.isPanchak ? .red : Color.white.opacity(0.76)))
                         .lineLimit(1)
                         .minimumScaleFactor(0.65)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -424,19 +633,20 @@ struct AndroidStyleCalendarScreen: View {
                                 .font(.caption.weight(.bold))
                             Text("(\(event.label(language: viewModel.language)))")
                                 .font(.caption2)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color.white.opacity(0.68))
                         }
                     }
                 }
                 .padding(10)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .foregroundStyle(.white)
+                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
 
             if let panchang {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(date.formatted(.dateTime.day().month(.abbreviated)))
                         .font(.headline)
-                        .foregroundStyle(Color.brown)
+                        .foregroundStyle(.white)
                     Divider()
                     PanchangDetailLine(label: viewModel.language == .hindi ? "तिथि" : "Tithi", value: panchang.tithi, systemImage: "sun.max")
                     PanchangDetailLine(label: viewModel.language == .hindi ? "नक्षत्र" : "Nakshatra", value: panchang.nakshatra, systemImage: "star")
@@ -463,12 +673,17 @@ struct AndroidStyleCalendarScreen: View {
                         ForEach(panchang.festivals, id: \.self) { festival in
                             Text("• \(festival)")
                                 .font(.caption)
-                                .foregroundStyle(Color.brown)
+                                .foregroundStyle(.white)
                         }
                     }
                 }
                 .padding(12)
-                .background(.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .foregroundStyle(.white)
+                .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                )
             }
         }
     }
@@ -492,7 +707,7 @@ struct AndroidStyleCalendarScreen: View {
             }
         }
         .padding(6)
-        .background(.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 
     private func stableCalendarDays(for month: Date) -> [Date?] {
@@ -510,13 +725,67 @@ struct AndroidStyleCalendarScreen: View {
         calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? date
     }
 
+    private func calendarEventSnapshot(selectedDate: Date, upcomingDays: Int) -> CalendarEventSnapshot {
+        let allMembers = viewModel.allResolvedMembers
+        let visible = visibleMembers(from: allMembers)
+        let memberByFamilyId = allMembers.reduce(into: [String: Member]()) { result, member in
+            result[member.familyId] = result[member.familyId] ?? member
+        }
+        let today = calendar.startOfDay(for: .now)
+        let selected = calendar.startOfDay(for: selectedDate)
+        var dates = Set<Date>()
+        dates.insert(selected)
+
+        for offset in -3...3 {
+            if let date = calendar.date(byAdding: .day, value: offset, to: selected) {
+                dates.insert(calendar.startOfDay(for: date))
+            }
+        }
+
+        for offset in 0...upcomingDays {
+            if let date = calendar.date(byAdding: .day, value: offset, to: today) {
+                dates.insert(calendar.startOfDay(for: date))
+            }
+        }
+
+        let eventMap = Dictionary(uniqueKeysWithValues: dates.map { date in
+            (date, familyEvents(on: date, members: visible, memberByFamilyId: memberByFamilyId))
+        })
+        let upcomingEvents = (0...upcomingDays).flatMap { offset -> [UpcomingCalendarEvent] in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: today) else { return [] }
+            let day = calendar.startOfDay(for: date)
+            return (eventMap[day] ?? []).map { UpcomingCalendarEvent(date: day, event: $0) }
+        }
+
+        return CalendarEventSnapshot(eventMap: eventMap, upcomingEvents: upcomingEvents)
+    }
+
+    private func familyEvents(on date: Date, members: [Member], memberByFamilyId: [String: Member]) -> [CalendarFamilyEvent] {
+        members.reduce(into: [CalendarFamilyEvent]()) { events, member in
+            if !member.isDeceased, matchesMonthDay(member.dateOfBirth, date: date) {
+                events.append(CalendarFamilyEvent(member: member, kind: .birthday))
+            }
+
+            if let marriageDate = member.marriageDate,
+               isActiveAnniversaryMember(member, memberByFamilyId: memberByFamilyId),
+               matchesMonthDay(marriageDate, date: date) {
+                events.append(CalendarFamilyEvent(member: member, kind: .anniversary))
+            }
+
+            if let bereavementDate = member.bereavementDate,
+               matchesMonthDay(bereavementDate, date: date) || matchesMonthDay(member.dateOfBirth, date: date) {
+                events.append(CalendarFamilyEvent(member: member, kind: .punyaTithi))
+            }
+        }
+    }
+
     private func birthdayMembers(on date: Date) -> [Member] {
-        visibleMembers.filter { matchesMonthDay($0.dateOfBirth, date: date) }
+        visibleMembers.filter { !$0.isDeceased && matchesMonthDay($0.dateOfBirth, date: date) }
     }
 
     private func anniversaryMembers(on date: Date) -> [Member] {
         visibleMembers.filter { member in
-            guard let marriageDate = member.marriageDate, !member.isDeceased else { return false }
+            guard let marriageDate = member.marriageDate, isActiveAnniversaryMember(member) else { return false }
             return matchesMonthDay(marriageDate, date: date)
         }
     }
@@ -524,7 +793,7 @@ struct AndroidStyleCalendarScreen: View {
     private func punyaTithiMembers(on date: Date) -> [Member] {
         visibleMembers.filter { member in
             guard let bereavementDate = member.bereavementDate else { return false }
-            return matchesMonthDay(bereavementDate, date: date)
+            return matchesMonthDay(bereavementDate, date: date) || matchesMonthDay(member.dateOfBirth, date: date)
         }
     }
 
@@ -532,6 +801,14 @@ struct AndroidStyleCalendarScreen: View {
         birthdayMembers(on: date).map { CalendarFamilyEvent(member: $0, kind: .birthday) }
             + anniversaryMembers(on: date).map { CalendarFamilyEvent(member: $0, kind: .anniversary) }
             + punyaTithiMembers(on: date).map { CalendarFamilyEvent(member: $0, kind: .punyaTithi) }
+    }
+
+    private func upcomingCalendarEvents(days: Int) -> [UpcomingCalendarEvent] {
+        let today = calendar.startOfDay(for: .now)
+        return (0...days).flatMap { offset -> [UpcomingCalendarEvent] in
+            guard let date = calendar.date(byAdding: .day, value: offset, to: today) else { return [] }
+            return familyEvents(on: date).map { UpcomingCalendarEvent(date: date, event: $0) }
+        }
     }
 
     private func familyEventIcon(birthdays: [Member], anniversaries: [Member], punyaTithis: [Member]) -> String {
@@ -545,8 +822,33 @@ struct AndroidStyleCalendarScreen: View {
     }
 
     private var visibleMembers: [Member] {
-        guard viewModel.currentUser?.isAdmin != true else { return viewModel.allResolvedMembers }
-        return viewModel.allResolvedMembers.filter { !$0.isAdmin || $0.id == viewModel.currentUser?.id }
+        visibleMembers(from: viewModel.allResolvedMembers)
+    }
+
+    private func visibleMembers(from allMembers: [Member]) -> [Member] {
+        guard !viewModel.hasAdminPrivileges else { return allMembers }
+        return allMembers.filter { !$0.isAdmin || $0.id == viewModel.currentUser?.id }
+    }
+
+    private func isActiveAnniversaryMember(_ member: Member, memberByFamilyId: [String: Member]) -> Bool {
+        guard !member.isDeceased else { return false }
+        guard let partner = memberByFamilyId[partnerFamilyId(for: member.familyId)] else { return true }
+        return !partner.isDeceased
+    }
+
+    private func isActiveAnniversaryMember(_ member: Member) -> Bool {
+        guard !member.isDeceased else { return false }
+        guard let partner = anniversaryPartner(for: member) else { return true }
+        return !partner.isDeceased
+    }
+
+    private func anniversaryPartner(for member: Member) -> Member? {
+        let partnerId = partnerFamilyId(for: member.familyId)
+        return viewModel.allResolvedMembers.first { $0.familyId == partnerId }
+    }
+
+    private func partnerFamilyId(for familyId: String) -> String {
+        familyId.hasSuffix("0") ? String(familyId.dropLast()) : familyId + "0"
     }
 
     private func matchesMonthDay(_ string: String?, date: Date) -> Bool {
@@ -567,6 +869,60 @@ struct AndroidStyleCalendarScreen: View {
     }
 }
 
+private struct UpcomingCalendarEvent: Identifiable {
+    let date: Date
+    let event: CalendarFamilyEvent
+
+    var id: String {
+        "\(date.timeIntervalSince1970)-\(event.id)"
+    }
+}
+
+private struct CalendarEventSnapshot {
+    let eventMap: [Date: [CalendarFamilyEvent]]
+    let upcomingEvents: [UpcomingCalendarEvent]
+
+    func events(on date: Date) -> [CalendarFamilyEvent] {
+        eventMap[Calendar.current.startOfDay(for: date)] ?? []
+    }
+
+    func hasEvents(on date: Date) -> Bool {
+        !events(on: date).isEmpty
+    }
+}
+
+private struct CalendarAvatar: View {
+    let member: Member
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.white.opacity(0.16))
+
+            Text(member.initials)
+                .font(.caption.weight(.heavy))
+                .foregroundStyle(.white)
+        }
+        .frame(width: 42, height: 42)
+        .overlay(
+            Circle()
+                .stroke(Color.white.opacity(0.16), lineWidth: 1)
+        )
+    }
+}
+
+private extension View {
+    func calendarGlassCard() -> some View {
+        self
+            .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(Color.white.opacity(0.16), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.16), radius: 10, x: 0, y: 4)
+    }
+}
+
 private struct CalendarBackground<Content: View>: View {
     @ViewBuilder let content: Content
 
@@ -576,10 +932,14 @@ private struct CalendarBackground<Content: View>: View {
 
     var body: some View {
         ZStack {
+            Color.black
+                .ignoresSafeArea()
+
             LinearGradient(
                 colors: [
-                    Color(red: 0xF9 / 255.0, green: 0xF4 / 255.0, blue: 0xE8 / 255.0),
-                    Color(red: 0xEF / 255.0, green: 0xEB / 255.0, blue: 0xE9 / 255.0)
+                    Color(red: 0x08 / 255.0, green: 0x0B / 255.0, blue: 0x14 / 255.0),
+                    Color(red: 0x1B / 255.0, green: 0x13 / 255.0, blue: 0x1A / 255.0),
+                    Color(red: 0x08 / 255.0, green: 0x0B / 255.0, blue: 0x14 / 255.0)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
@@ -635,15 +995,15 @@ private struct PanchangDetailLine: View {
         HStack(alignment: .top, spacing: 6) {
             Image(systemName: systemImage)
                 .font(.caption2)
-                .foregroundStyle(Color.brown.opacity(0.65))
+                .foregroundStyle(Color.yellow.opacity(0.82))
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
                 Text(label)
                     .font(.system(size: 9))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.white.opacity(0.62))
                 Text(value)
                     .font(.system(size: 10, weight: .bold))
-                    .foregroundStyle(Color.brown)
+                    .foregroundStyle(.white)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }

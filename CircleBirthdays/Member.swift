@@ -25,6 +25,9 @@ struct Member: Identifiable, Equatable {
     let password: String?
     let isAdmin: Bool
     let isEditor: Bool
+    let isPrimaryTree: Bool
+    let secondaryTreeEnabled: Bool
+    let treeId: String
     let status: String
     let lastLoggedIn: Int64?
     let relationship: String?
@@ -65,6 +68,9 @@ struct Member: Identifiable, Equatable {
         password: String?,
         isAdmin: Bool,
         isEditor: Bool,
+        isPrimaryTree: Bool = true,
+        secondaryTreeEnabled: Bool = false,
+        treeId: String = "primary",
         status: String,
         lastLoggedIn: Int64?,
         relationship: String?,
@@ -104,6 +110,9 @@ struct Member: Identifiable, Equatable {
         self.password = password
         self.isAdmin = isAdmin
         self.isEditor = isEditor
+        self.isPrimaryTree = isPrimaryTree
+        self.secondaryTreeEnabled = secondaryTreeEnabled
+        self.treeId = treeId
         self.status = status
         self.lastLoggedIn = lastLoggedIn
         self.relationship = relationship
@@ -240,6 +249,9 @@ extension Member {
             password: password ?? self.password,
             isAdmin: isAdmin,
             isEditor: isEditor,
+            isPrimaryTree: isPrimaryTree,
+            secondaryTreeEnabled: secondaryTreeEnabled,
+            treeId: treeId,
             status: status,
             lastLoggedIn: lastLoggedIn,
             relationship: relationship ?? self.relationship,

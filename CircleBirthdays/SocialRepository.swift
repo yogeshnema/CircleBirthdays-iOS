@@ -17,6 +17,7 @@ protocol SocialRepository {
     func markChatRead(channelID: String, userID: String) async throws
     func uploadImageData(_ data: Data, folder: String) async throws -> String
     func uploadAudioData(_ data: Data, folder: String, fileExtension: String) async throws -> String
+    func submitDiscussion(_ discussion: DiscussionThread) async throws
     func submitMemory(_ memory: MemoryPost) async throws
     func deleteMemory(memoryID: String) async throws
     func toggleMemoryReaction(memoryID: String, emoji: String, userID: String) async throws
