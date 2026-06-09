@@ -272,12 +272,11 @@ final class AppViewModel {
     }
 
     var hasAdminPrivileges: Bool {
-        isPrimaryAdminLogin
+        currentUser?.isAdmin == true
     }
 
     var isPrimaryAdminLogin: Bool {
-        guard let currentUser else { return false }
-        return Self.normalizePhoneNumber(currentUser.phoneNumber) == "9999999999"
+        hasAdminPrivileges
     }
 
     var visibleTraditions: [Tradition] {
