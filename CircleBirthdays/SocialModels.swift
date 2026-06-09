@@ -32,6 +32,7 @@ struct Recipe: Identifiable, Equatable {
     let imageURL: String
     let reactions: [String: [String]]
     let comments: [PostComment]
+    let status: String
     let timestamp: Date
 }
 
@@ -44,6 +45,7 @@ struct Tradition: Identifiable, Equatable {
     let imageURL: String
     let reactions: [String: [String]]
     let comments: [PostComment]
+    let status: String
     let timestamp: Date
 }
 
@@ -62,6 +64,7 @@ struct Milestone: Identifiable, Equatable {
     let familyContextId: String
     let reactions: [String: [String]]
     let comments: [PostComment]
+    let status: String
 }
 
 enum DiscussionKind: String, Equatable, Hashable {

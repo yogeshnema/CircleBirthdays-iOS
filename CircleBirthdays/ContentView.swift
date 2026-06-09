@@ -401,14 +401,8 @@ private enum AppBackgroundTreatment {
     case flatDashboard
 }
 
-private struct AppBackground<Content: View>: View {
+private struct AppBackgroundLayer: View {
     let treatment: AppBackgroundTreatment
-    @ViewBuilder let content: Content
-
-    init(treatment: AppBackgroundTreatment = .androidTint, @ViewBuilder content: () -> Content) {
-        self.treatment = treatment
-        self.content = content()
-    }
 
     var body: some View {
         ZStack {
@@ -421,13 +415,8 @@ private struct AppBackground<Content: View>: View {
                 .opacity(backgroundImageOpacity)
                 .ignoresSafeArea()
 
-            if treatment == .flatDashboard {
-                Color(red: 0xF6 / 255.0, green: 0xF3 / 255.0, blue: 0xEC / 255.0)
-                    .opacity(0.28)
-                    .ignoresSafeArea()
-            }
-
-            if treatment == .light {
+            switch treatment {
+            case .light:
                 LinearGradient(
                     colors: [
                         AndroidLook.lightGolden.opacity(0.16),
@@ -438,22 +427,15 @@ private struct AppBackground<Content: View>: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-            } else if treatment == .androidTint {
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.84),
-                        AndroidLook.deepBrown.opacity(0.76),
-                        Color.black.opacity(0.88)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
+            case .androidTint:
+                Color.black
+                    .opacity(0.36)
+                    .ignoresSafeArea()
+            case .flatDashboard:
+                Color.black
+                    .opacity(0.24)
+                    .ignoresSafeArea()
             }
-
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
-                .background(Color.clear)
         }
     }
 
@@ -465,6 +447,26 @@ private struct AppBackground<Content: View>: View {
             return 0.96
         case .flatDashboard:
             return 0.82
+        }
+    }
+}
+
+private struct AppBackground<Content: View>: View {
+    let treatment: AppBackgroundTreatment
+    @ViewBuilder let content: Content
+
+    init(treatment: AppBackgroundTreatment = .androidTint, @ViewBuilder content: () -> Content) {
+        self.treatment = treatment
+        self.content = content()
+    }
+
+    var body: some View {
+        ZStack {
+            AppBackgroundLayer(treatment: treatment)
+
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                .background(Color.clear)
         }
     }
 }
@@ -498,7 +500,7 @@ private struct LoginScreen: View {
                                         Circle()
                                             .strokeBorder(
                                                 LinearGradient(
-                                                    colors: [Color.white.opacity(0.82), Color.orange.opacity(0.20)],
+                                                    colors: [Color.white.opacity(0.58), Color.orange.opacity(0.20)],
                                                     startPoint: .topLeading,
                                                     endPoint: .bottomTrailing
                                                 ),
@@ -644,9 +646,12 @@ private struct DashboardScreen: View {
                     let actionTileWidth = max(132.0, floor((contentWidth - cardSpacing) / 2.0))
 
                     NavigationStack {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: max(16.0, 18.0 * layoutScale)) {
-                                dashboardAndroidTopBar(
+                        ZStack {
+                            AppBackgroundLayer(treatment: .flatDashboard)
+
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: max(16.0, 18.0 * layoutScale)) {
+                                    dashboardAndroidTopBar(
                                     viewModel: viewModel,
                                     layoutScale: layoutScale,
                                     onChangePassword: {
@@ -666,10 +671,20 @@ private struct DashboardScreen: View {
                                 LazyVGrid(columns: [
                                     GridItem(.adaptive(minimum: statMinWidth), spacing: cardSpacing)
                                 ], spacing: cardSpacing) {
-                                    StatTile(title: localized("Members", language: viewModel.language), value: "\(viewModel.dashboardActiveMembers.count)", layoutScale: layoutScale)
+                                    Button {
+                                        viewModel.showProfiles()
+                                    } label: {
+                                        StatTile(title: localized("Members", language: viewModel.language), value: "\(viewModel.dashboardActiveMembers.count)", layoutScale: layoutScale)
+                                    }
+                                    .buttonStyle(.plain)
                                     StatTile(title: localized("Today", language: viewModel.language), value: "\(viewModel.todayEvents.count)", layoutScale: layoutScale)
-                                    if viewModel.hasAdminPrivileges && viewModel.pendingCount > 0 {
-                                        StatTile(title: localized("Pending", language: viewModel.language), value: "\(viewModel.pendingCount)", layoutScale: layoutScale)
+                                    if viewModel.hasAdminPrivileges {
+                                        Button {
+                                            viewModel.showProfiles()
+                                        } label: {
+                                            StatTile(title: localized("Pending", language: viewModel.language), value: "\(viewModel.approvalPendingCount)", layoutScale: layoutScale)
+                                        }
+                                        .buttonStyle(.plain)
                                     }
                                 }
 
@@ -685,7 +700,7 @@ private struct DashboardScreen: View {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Text(localized("Events Today", language: viewModel.language))
                                             .font(.headline)
-                                            .foregroundStyle(AndroidLook.deepBrown)
+                                            .foregroundStyle(AndroidLook.lightGolden)
 
                                         ForEach(viewModel.todayEvents.prefix(5)) { event in
                                             FamilyEventRow(
@@ -704,7 +719,7 @@ private struct DashboardScreen: View {
                                     VStack(alignment: .leading, spacing: 12) {
                                         Text(localized("Upcoming Events (7 Days)", language: viewModel.language))
                                             .font(.headline)
-                                            .foregroundStyle(AndroidLook.deepBrown)
+                                            .foregroundStyle(AndroidLook.lightGolden)
 
                                         ForEach(viewModel.upcomingEvents.prefix(5)) { event in
                                             FamilyEventRow(
@@ -724,7 +739,10 @@ private struct DashboardScreen: View {
                             .padding(.vertical, 14)
                             .frame(maxWidth: .infinity, alignment: .center)
                         }
-                        .toolbar(.hidden, for: .navigationBar)
+                        .scrollContentBackground(.hidden)
+                        .background(Color.clear)
+                    }
+                    .toolbar(.hidden, for: .navigationBar)
                         .sheet(isPresented: $isPasswordDialogPresented) {
                             ChangePasswordSheet(
                                 language: viewModel.language,
@@ -786,34 +804,11 @@ private struct ProfilesScreen: View {
     @Bindable var viewModel: AppViewModel
     @State private var editingMember: Member?
     @State private var viewingMember: Member?
-    @State private var treeMember: Member?
 
     var body: some View {
         AppBackground {
             NavigationStack {
                 List {
-                    Section {
-                        Button {
-                            treeMember = viewModel.currentUser ?? viewModel.visibleMembers.first
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "tree")
-                                    .font(.title3)
-                                    .foregroundStyle(.orange)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(localized("Open Family Tree", language: viewModel.language))
-                                        .font(.headline)
-                                    Text(localized("Browse the family hierarchy for the selected member.", language: viewModel.language))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                            }
-                            .padding(.vertical, 6)
-                        }
-                        .buttonStyle(.plain)
-                    }
-
                 if viewModel.hasAdminPrivileges && !viewModel.pendingMembers.isEmpty {
                     Section(localized("Pending Approvals", language: viewModel.language)) {
                         ForEach(viewModel.resolvedPendingMembers) { member in
@@ -911,14 +906,6 @@ private struct ProfilesScreen: View {
                             Label(localized("Home", language: viewModel.language), systemImage: "house")
                         }
                     }
-
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button {
-                            treeMember = viewModel.currentUser ?? viewModel.visibleMembers.first
-                        } label: {
-                            Label("Tree", systemImage: "tree")
-                        }
-                    }
                 }
                 .sheet(item: $editingMember) { member in
                     MemberEditScreen(
@@ -953,21 +940,6 @@ private struct ProfilesScreen: View {
                         },
                         onClose: {
                             viewingMember = nil
-                        }
-                    )
-                }
-                .sheet(item: $treeMember) { member in
-                    FamilyTreeScreen(
-                        member: member,
-                        allMembers: viewModel.allResolvedMembers,
-                        canEdit: viewModel.canEdit(member),
-                        language: viewModel.language,
-                        onEdit: {
-                            treeMember = nil
-                            editingMember = member
-                        },
-                        onClose: {
-                            treeMember = nil
                         }
                     )
                 }
@@ -1145,12 +1117,19 @@ private struct GalleryScreen: View {
                                 MemoryCard(
                                     memory: memory,
                                     contentWidth: contentWidth,
+                                    canRequestDelete: viewModel.canRequestContentDeletion(authorId: memory.userId),
+                                    canApprove: viewModel.hasAdminPrivileges && memory.status == "PENDING",
                                     onRequestDelete: {
                                         pendingDeletionRequest = PendingDeletionRequest(
                                             collectionName: "memories",
                                             docId: memory.id,
                                             title: memory.caption
                                         )
+                                    },
+                                    onApprove: {
+                                        Task {
+                                            await viewModel.approveMemory(memory)
+                                        }
                                     },
                                     onOpen: {
                                         selectedMemory = memory
@@ -1191,8 +1170,8 @@ private struct GalleryScreen: View {
                 .sheet(isPresented: $showEditor) {
                     MemoryEditorSheet(viewModel: viewModel, onClose: { showEditor = false })
                 }
-                .fullScreenCover(item: $selectedMemory) { memory in
-                    FullScreenMemoryPhotoView(memory: memory, onClose: { selectedMemory = nil })
+                .sheet(item: $selectedMemory) { memory in
+                    MemoryDetailSheet(viewModel: viewModel, memory: memory, onClose: { selectedMemory = nil })
                 }
                 .sheet(item: $pendingDeletionRequest) { request in
                     DeletionRequestSheet(
@@ -1237,12 +1216,19 @@ private struct DiscussionsScreen: View {
                             ForEach(viewModel.visibleDiscussions.sorted { $0.timestamp > $1.timestamp }) { discussion in
                                 DiscussionCard(
                                     discussion: discussion,
+                                    canRequestDelete: viewModel.canRequestContentDeletion(authorId: discussion.userId),
+                                    canApprove: viewModel.hasAdminPrivileges && discussion.status == "PENDING",
                                     onRequestDelete: {
                                         pendingDeletionRequest = PendingDeletionRequest(
                                             collectionName: "discussions",
                                             docId: discussion.id,
                                             title: discussion.title
                                         )
+                                    },
+                                    onApprove: {
+                                        Task {
+                                            await viewModel.approveDiscussion(discussion)
+                                        }
                                     }
                                 )
                                 .frame(width: contentWidth, alignment: .leading)
@@ -1319,6 +1305,7 @@ private struct CookbookScreen: View {
     @State private var showEditor = false
     @State private var editingRecipe: Recipe?
     @State private var selectedRecipe: Recipe?
+    @State private var pendingDeletionRequest: PendingDeletionRequest?
 
     var body: some View {
         AppBackground {
@@ -1334,13 +1321,29 @@ private struct CookbookScreen: View {
                                 RecipeCard(
                                     recipe: recipe,
                                     contentWidth: contentWidth,
+                                    canEdit: viewModel.canManageContent(authorId: recipe.authorId),
+                                    canRequestDelete: viewModel.canRequestContentDeletion(authorId: recipe.authorId),
+                                    canApprove: viewModel.hasAdminPrivileges && recipe.status == "PENDING",
                                     onEdit: {
                                         editingRecipe = recipe
                                         showEditor = true
                                     },
                                     onDelete: {
+                                        if viewModel.hasAdminPrivileges {
+                                            Task {
+                                                await viewModel.deleteRecipe(recipe)
+                                            }
+                                        } else {
+                                            pendingDeletionRequest = PendingDeletionRequest(
+                                                collectionName: "recipes",
+                                                docId: recipe.id,
+                                                title: recipe.title
+                                            )
+                                        }
+                                    },
+                                    onApprove: {
                                         Task {
-                                            await viewModel.deleteRecipe(recipe)
+                                            await viewModel.approveRecipe(recipe)
                                         }
                                     }
                                 )
@@ -1396,6 +1399,26 @@ private struct CookbookScreen: View {
                 .sheet(item: $selectedRecipe) { recipe in
                     RecipeDetailSheet(viewModel: viewModel, recipe: recipe, onClose: { selectedRecipe = nil })
                 }
+                .sheet(item: $pendingDeletionRequest) { request in
+                    DeletionRequestSheet(
+                        language: viewModel.language,
+                        requestTitle: request.title,
+                        onSubmit: { reason in
+                            Task {
+                                await viewModel.requestDeletion(
+                                    collectionName: request.collectionName,
+                                    docId: request.docId,
+                                    title: request.title,
+                                    reason: reason
+                                )
+                            }
+                            pendingDeletionRequest = nil
+                        },
+                        onCancel: {
+                            pendingDeletionRequest = nil
+                        }
+                    )
+                }
             }
         }
     }
@@ -1406,6 +1429,7 @@ private struct TraditionsScreen: View {
     @State private var showEditor = false
     @State private var editingTradition: Tradition?
     @State private var selectedTradition: Tradition?
+    @State private var pendingDeletionRequest: PendingDeletionRequest?
 
     var body: some View {
         AppBackground {
@@ -1421,13 +1445,29 @@ private struct TraditionsScreen: View {
                                 TraditionCard(
                                     tradition: tradition,
                                     contentWidth: contentWidth,
+                                    canEdit: viewModel.canManageContent(authorId: tradition.authorId),
+                                    canRequestDelete: viewModel.canRequestContentDeletion(authorId: tradition.authorId),
+                                    canApprove: viewModel.hasAdminPrivileges && tradition.status == "PENDING",
                                     onEdit: {
                                         editingTradition = tradition
                                         showEditor = true
                                     },
                                     onDelete: {
+                                        if viewModel.hasAdminPrivileges {
+                                            Task {
+                                                await viewModel.deleteTradition(tradition)
+                                            }
+                                        } else {
+                                            pendingDeletionRequest = PendingDeletionRequest(
+                                                collectionName: "traditions",
+                                                docId: tradition.id,
+                                                title: tradition.title
+                                            )
+                                        }
+                                    },
+                                    onApprove: {
                                         Task {
-                                            await viewModel.deleteTradition(tradition)
+                                            await viewModel.approveTradition(tradition)
                                         }
                                     }
                                 )
@@ -1482,6 +1522,26 @@ private struct TraditionsScreen: View {
                 }
                 .sheet(item: $selectedTradition) { tradition in
                     TraditionDetailSheet(viewModel: viewModel, tradition: tradition, onClose: { selectedTradition = nil })
+                }
+                .sheet(item: $pendingDeletionRequest) { request in
+                    DeletionRequestSheet(
+                        language: viewModel.language,
+                        requestTitle: request.title,
+                        onSubmit: { reason in
+                            Task {
+                                await viewModel.requestDeletion(
+                                    collectionName: request.collectionName,
+                                    docId: request.docId,
+                                    title: request.title,
+                                    reason: reason
+                                )
+                            }
+                            pendingDeletionRequest = nil
+                        },
+                        onCancel: {
+                            pendingDeletionRequest = nil
+                        }
+                    )
                 }
             }
         }
@@ -1555,8 +1615,12 @@ private struct MemoryLaneTrackSection: View {
     let milestones: [Milestone]
     let language: AppLanguage
     let contentWidth: CGFloat
+    let canManage: (Milestone) -> Bool
+    let canRequestDelete: (Milestone) -> Bool
+    let canApprove: (Milestone) -> Bool
     let onEdit: (Milestone) -> Void
     let onDelete: (Milestone) -> Void
+    let onApprove: (Milestone) -> Void
     let onSelect: (Milestone) -> Void
 
     var body: some View {
@@ -1599,11 +1663,17 @@ private struct MemoryLaneTrackSection: View {
                         milestone: milestone,
                         language: language,
                         contentWidth: max(0.0, contentWidth - 24),
+                        canEdit: canManage(milestone),
+                        canRequestDelete: canRequestDelete(milestone),
+                        canApprove: canApprove(milestone),
                         onEdit: {
                             onEdit(milestone)
                         },
                         onDelete: {
                             onDelete(milestone)
+                        },
+                        onApprove: {
+                            onApprove(milestone)
                         }
                     )
                     .overlay(alignment: .topTrailing) {
@@ -1656,6 +1726,7 @@ private struct MemoryLaneScreen: View {
     @State private var showEditor = false
     @State private var editingMilestone: Milestone?
     @State private var selectedMilestone: Milestone?
+    @State private var pendingDeletionRequest: PendingDeletionRequest?
 
     var body: some View {
         AppBackground {
@@ -1673,13 +1744,35 @@ private struct MemoryLaneScreen: View {
                                     milestones: viewModel.visibleMilestones.filter { track.contains($0) },
                                     language: viewModel.language,
                                     contentWidth: contentWidth,
+                                    canManage: { milestone in
+                                        viewModel.canManageContent(authorId: milestone.authorId)
+                                    },
+                                    canRequestDelete: { milestone in
+                                        viewModel.canRequestContentDeletion(authorId: milestone.authorId)
+                                    },
+                                    canApprove: { milestone in
+                                        viewModel.hasAdminPrivileges && milestone.status == "PENDING"
+                                    },
                                     onEdit: { milestone in
                                         editingMilestone = milestone
                                         showEditor = true
                                     },
                                     onDelete: { milestone in
+                                        if viewModel.hasAdminPrivileges {
+                                            Task {
+                                                await viewModel.deleteMilestone(milestone)
+                                            }
+                                        } else {
+                                            pendingDeletionRequest = PendingDeletionRequest(
+                                                collectionName: "memorylane",
+                                                docId: milestone.id,
+                                                title: milestone.title
+                                            )
+                                        }
+                                    },
+                                    onApprove: { milestone in
                                         Task {
-                                            await viewModel.deleteMilestone(milestone)
+                                            await viewModel.approveMilestone(milestone)
                                         }
                                     },
                                     onSelect: { milestone in
@@ -1733,6 +1826,26 @@ private struct MemoryLaneScreen: View {
                 }
                 .sheet(item: $selectedMilestone) { milestone in
                     MilestoneDetailSheet(viewModel: viewModel, milestone: milestone, onClose: { selectedMilestone = nil })
+                }
+                .sheet(item: $pendingDeletionRequest) { request in
+                    DeletionRequestSheet(
+                        language: viewModel.language,
+                        requestTitle: request.title,
+                        onSubmit: { reason in
+                            Task {
+                                await viewModel.requestDeletion(
+                                    collectionName: request.collectionName,
+                                    docId: request.docId,
+                                    title: request.title,
+                                    reason: reason
+                                )
+                            }
+                            pendingDeletionRequest = nil
+                        },
+                        onCancel: {
+                            pendingDeletionRequest = nil
+                        }
+                    )
                 }
             }
         }
@@ -1852,7 +1965,7 @@ private func dashboardAndroidTopBar(
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 14)
-    .background(Color.white, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay(
         RoundedRectangle(cornerRadius: 18, style: .continuous)
             .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -1928,7 +2041,8 @@ private struct AndroidDashboardSectionHeader: View {
                 .frame(width: 10, height: 10)
             Text(title)
                 .font(.title3.weight(.bold))
-                .foregroundStyle(AndroidLook.deepBrown)
+                .foregroundStyle(AndroidLook.lightGolden)
+                .shadow(color: Color.black.opacity(0.26), radius: 2, x: 0, y: 1)
         }
     }
 }
@@ -2046,7 +2160,7 @@ private func dashboardHeroCard(
         }
         .padding(max(18.0, 20.0 * layoutScale))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous))
+        .background(Color.white.opacity(0.60), in: RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -2153,13 +2267,13 @@ private func dashboardQuickActions(
                 }
                 .buttonStyle(.plain)
 
-                if viewModel.hasAdminPrivileges && viewModel.pendingCount > 0 {
+                if viewModel.hasAdminPrivileges {
                     Button {
                         viewModel.showProfiles()
                     } label: {
                         DashboardActionLabel(
                             title: localized("Approvals", language: viewModel.language),
-                            subtitle: viewModel.pendingCount > 0 ? "\(viewModel.pendingCount) \(localized("pending", language: viewModel.language))" : localized("No pending", language: viewModel.language),
+                            subtitle: viewModel.approvalPendingCount > 0 ? "\(viewModel.approvalPendingCount) \(localized("pending", language: viewModel.language))" : localized("No pending", language: viewModel.language),
                             systemImage: "checkmark.seal.fill",
                             tint: AndroidLook.softBrown,
                             background: LinearGradient(colors: [Color.green.opacity(0.24), Color.mint.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -2280,7 +2394,7 @@ private func dashboardQuickActions(
                 } label: {
                     DashboardActionLabel(
                         title: localized("Emergency", language: viewModel.language),
-                        subtitle: "Family contacts",
+                        subtitle: "Numbers + nearby",
                         systemImage: "cross.case.fill",
                         tint: Color(red: 0.90, green: 0.10, blue: 0.12),
                         background: LinearGradient(colors: [Color.red.opacity(0.28), Color.orange.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -2949,7 +3063,7 @@ private struct MemberListRow: View {
         .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(Color.white.opacity(0.82), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -2984,7 +3098,10 @@ private struct MemberListRow: View {
 private struct MemoryCard: View {
     let memory: MemoryPost
     let contentWidth: CGFloat
+    let canRequestDelete: Bool
+    let canApprove: Bool
     let onRequestDelete: () -> Void
+    let onApprove: () -> Void
     let onOpen: () -> Void
 
     var body: some View {
@@ -3035,12 +3152,27 @@ private struct MemoryCard: View {
                 Text("\(memory.comments.count) comments")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Button(action: onRequestDelete) {
-                    Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.red)
+                if memory.status == "PENDING" {
+                    Text("Pending")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.14), in: Capsule())
                 }
-                .buttonStyle(.borderless)
+                if canApprove {
+                    Button("Approve", action: onApprove)
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.borderedProminent)
+                }
+                if canRequestDelete {
+                    Button(action: onRequestDelete) {
+                        Image(systemName: "trash")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
 
             if !memory.caption.isEmpty {
@@ -3188,7 +3320,10 @@ private struct FullScreenMemoryPhotoView: View {
 
 private struct DiscussionCard: View {
     let discussion: DiscussionThread
+    let canRequestDelete: Bool
+    let canApprove: Bool
     let onRequestDelete: () -> Void
+    let onApprove: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -3202,12 +3337,27 @@ private struct DiscussionCard: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.orange.opacity(0.12), in: Capsule())
-                Button(action: onRequestDelete) {
-                    Image(systemName: "trash")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.red)
+                if discussion.status == "PENDING" {
+                    Text("Pending")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
                 }
-                .buttonStyle(.borderless)
+                if canApprove {
+                    Button("Approve", action: onApprove)
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.borderedProminent)
+                }
+                if canRequestDelete {
+                    Button(action: onRequestDelete) {
+                        Image(systemName: "trash")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
 
             Text("By \(discussion.userName)")
@@ -3245,8 +3395,12 @@ private struct DiscussionCard: View {
 private struct RecipeCard: View {
     let recipe: Recipe
     let contentWidth: CGFloat
+    let canEdit: Bool
+    let canRequestDelete: Bool
+    let canApprove: Bool
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onApprove: () -> Void
 
     var body: some View {
         let imageWidth = cardInnerWidth(for: contentWidth)
@@ -3278,15 +3432,32 @@ private struct RecipeCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(action: onEdit) {
-                    Image(systemName: "square.and.pencil")
+                if recipe.status == "PENDING" {
+                    Text("Pending")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
                 }
-                .buttonStyle(.borderless)
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red)
+                if canApprove {
+                    Button("Approve", action: onApprove)
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderless)
+                if canEdit {
+                    Button(action: onEdit) {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if canRequestDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
 
             Text(recipe.description)
@@ -3330,8 +3501,12 @@ private struct RecipeCard: View {
 private struct TraditionCard: View {
     let tradition: Tradition
     let contentWidth: CGFloat
+    let canEdit: Bool
+    let canRequestDelete: Bool
+    let canApprove: Bool
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onApprove: () -> Void
 
     var body: some View {
         let imageWidth = cardInnerWidth(for: contentWidth)
@@ -3363,15 +3538,32 @@ private struct TraditionCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(action: onEdit) {
-                    Image(systemName: "square.and.pencil")
+                if tradition.status == "PENDING" {
+                    Text("Pending")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
                 }
-                .buttonStyle(.borderless)
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red)
+                if canApprove {
+                    Button("Approve", action: onApprove)
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderless)
+                if canEdit {
+                    Button(action: onEdit) {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if canRequestDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
 
             Text(tradition.description)
@@ -3411,8 +3603,12 @@ private struct MilestoneCard: View {
     let milestone: Milestone
     let language: AppLanguage
     let contentWidth: CGFloat
+    let canEdit: Bool
+    let canRequestDelete: Bool
+    let canApprove: Bool
     let onEdit: () -> Void
     let onDelete: () -> Void
+    let onApprove: () -> Void
 
     var body: some View {
         let imageWidth = cardInnerWidth(for: contentWidth)
@@ -3453,15 +3649,32 @@ private struct MilestoneCard: View {
                     }
                 }
                 Spacer()
-                Button(action: onEdit) {
-                    Image(systemName: "square.and.pencil")
+                if milestone.status == "PENDING" {
+                    Text("Pending")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.orange)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.12), in: Capsule())
                 }
-                .buttonStyle(.borderless)
-                Button(action: onDelete) {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red)
+                if canApprove {
+                    Button("Approve", action: onApprove)
+                        .font(.caption.weight(.bold))
+                        .buttonStyle(.borderedProminent)
                 }
-                .buttonStyle(.borderless)
+                if canEdit {
+                    Button(action: onEdit) {
+                        Image(systemName: "square.and.pencil")
+                    }
+                    .buttonStyle(.borderless)
+                }
+                if canRequestDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .foregroundStyle(.red)
+                    }
+                    .buttonStyle(.borderless)
+                }
             }
 
             Text(milestone.description)
@@ -3797,10 +4010,13 @@ private struct MemoryDetailSheet: View {
     @State private var memory: MemoryPost
     let onClose: () -> Void
     @State private var commentText = ""
+    @State private var captionText = ""
+    @State private var isEditingCaption = false
 
     init(viewModel: AppViewModel, memory: MemoryPost, onClose: @escaping () -> Void) {
         self.viewModel = viewModel
         self._memory = State(initialValue: memory)
+        self._captionText = State(initialValue: memory.caption)
         self.onClose = onClose
     }
 
@@ -3816,9 +4032,53 @@ private struct MemoryDetailSheet: View {
 
                     detailImage(urlString: memory.imageURL)
 
-                    if !memory.caption.isEmpty {
-                        Text(memory.caption)
-                            .font(.subheadline)
+                    if isEditingCaption {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TextField("Caption", text: $captionText, axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                            HStack {
+                                Button("Cancel") {
+                                    captionText = memory.caption
+                                    isEditingCaption = false
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button("Save Caption") {
+                                    Task {
+                                        await viewModel.updateMemoryCaption(memory, caption: captionText)
+                                        if let latest = viewModel.memories.first(where: { $0.id == memory.id }) {
+                                            memory = latest
+                                            captionText = latest.caption
+                                        }
+                                        isEditingCaption = false
+                                    }
+                                }
+                                .buttonStyle(.borderedProminent)
+                            }
+                        }
+                    } else if !memory.caption.isEmpty {
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(memory.caption)
+                                .font(.subheadline)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if canEditCaption {
+                                Button {
+                                    captionText = memory.caption
+                                    isEditingCaption = true
+                                } label: {
+                                    Image(systemName: "pencil")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                    } else if canEditCaption {
+                        Button {
+                            captionText = ""
+                            isEditingCaption = true
+                        } label: {
+                            Label("Add Caption", systemImage: "pencil")
+                        }
+                        .buttonStyle(.bordered)
                     }
 
                     reactionBar
@@ -3886,6 +4146,10 @@ private struct MemoryDetailSheet: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+
+    private var canEditCaption: Bool {
+        viewModel.currentUser?.id == memory.userId || viewModel.hasAdminPrivileges
     }
 }
 
@@ -4010,7 +4274,7 @@ private struct MemoryEditorSheet: View {
             imageURL: url,
             caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
             timestamp: .now,
-            status: "APPROVED",
+            status: viewModel.newContentStatus,
             reactions: [:],
             comments: []
         )
@@ -4157,6 +4421,7 @@ private struct RecipeEditorSheet: View {
                                     imageURL: finalImageURL,
                                     reactions: existingRecipe?.reactions ?? [:],
                                     comments: existingRecipe?.comments ?? [],
+                                    status: existingRecipe?.status ?? viewModel.newContentStatus,
                                     timestamp: existingRecipe?.timestamp ?? .now
                                 )
                             )
@@ -4248,6 +4513,7 @@ private struct TraditionEditorSheet: View {
                                     imageURL: finalImageURL,
                                     reactions: existingTradition?.reactions ?? [:],
                                     comments: existingTradition?.comments ?? [],
+                                    status: existingTradition?.status ?? viewModel.newContentStatus,
                                     timestamp: existingTradition?.timestamp ?? .now
                                 )
                             )
@@ -4313,7 +4579,7 @@ private struct DiscussionEditorSheet: View {
                                 content: content.trimmingCharacters(in: .whitespacesAndNewlines),
                                 pollOptions: pollOptions,
                                 timestamp: .now,
-                                status: "APPROVED",
+                                status: viewModel.newContentStatus,
                                 comments: []
                             )
                         )
@@ -4469,7 +4735,8 @@ private struct MilestoneEditorSheet: View {
                                     visibilityType: visibilityType,
                                     familyContextId: familyContextId.trimmingCharacters(in: .whitespacesAndNewlines),
                                     reactions: existingMilestone?.reactions ?? [:],
-                                    comments: existingMilestone?.comments ?? []
+                                    comments: existingMilestone?.comments ?? [],
+                                    status: existingMilestone?.status ?? viewModel.newContentStatus
                                 )
                             )
                         }
@@ -4491,20 +4758,17 @@ private struct FamilyEventRow: View {
     }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            compactRow
-            stackedRow
-        }
+        eventRow
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
     }
 
-    private var compactRow: some View {
+    private var eventRow: some View {
         HStack(spacing: 12) {
             AvatarView(member: member, size: 38)
 
@@ -4544,48 +4808,6 @@ private struct FamilyEventRow: View {
             .frame(width: 82, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var stackedRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            AvatarView(member: member, size: 38)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(member.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AndroidLook.deepBrown)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.85)
-
-                    Spacer(minLength: 8)
-                }
-
-                Text(eventTitle)
-                    .font(.caption)
-                    .foregroundStyle(AndroidLook.mutedBrown)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-
-                HStack(spacing: 8) {
-                    Text(daysText)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(AndroidLook.deepBrown)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.8)
-
-                    Text(secondaryText)
-                        .font(.caption)
-                        .foregroundStyle(AndroidLook.mutedBrown)
-
-                    Spacer(minLength: 0)
-
-                    if canGenerateCard, let onGenerateCard {
-                        aiCardButton(action: onGenerateCard)
-                    }
-                }
-            }
-        }
     }
 
     private func aiCardButton(action: @escaping () -> Void) -> some View {
@@ -5054,7 +5276,7 @@ private struct AssistantBubble: View {
                 .foregroundStyle(message.isUser ? .white : .primary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
-                .background(message.isUser ? AndroidLook.softBrown : Color.white.opacity(0.82), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(message.isUser ? AndroidLook.softBrown : Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             if !message.isUser { Spacer(minLength: 40) }
         }
     }
@@ -5804,46 +6026,187 @@ private struct BusinessDirectoryScreen: View {
 private struct EmergencyScreen: View {
     @Bindable var viewModel: AppViewModel
 
-    var emergencyContacts: [Member] {
-        let admins = viewModel.dashboardApprovedMembers.filter { $0.isAdmin || $0.isEditor }
-        let fallback = viewModel.dashboardApprovedMembers.filter { !$0.phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-        return Array((admins.isEmpty ? fallback : admins).prefix(12))
-    }
-
     var body: some View {
         AppBackground {
             NavigationStack {
-                List {
-                    Section("Family Emergency Contacts") {
-                        ForEach(emergencyContacts) { member in
-                            HStack(spacing: 12) {
-                                AvatarView(member: member, size: 38)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(member.name)
-                                        .font(.subheadline.weight(.semibold))
-                                    Text(member.relationship ?? (member.isAdmin ? "Admin" : member.phoneNumber))
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                let digits = member.phoneNumber.filter(\.isNumber)
-                                if !digits.isEmpty, let phoneURL = URL(string: "tel://\(digits)") {
-                                    Link(destination: phoneURL) {
-                                        Image(systemName: "phone.fill")
-                                            .foregroundStyle(.white)
-                                            .frame(width: 34, height: 34)
-                                            .background(Color.red, in: Circle())
-                                    }
-                                }
-                            }
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        locationStatusCard
+
+                        emergencySectionTitle("Call Now")
+                        ForEach(emergencyNumbers) { item in
+                            EmergencyActionRow(
+                                systemImage: item.systemImage,
+                                iconColor: item.color,
+                                title: item.title,
+                                subtitle: "\(item.subtitle) • \(item.number)",
+                                actionTitle: "Call",
+                                actionImage: "phone.fill",
+                                actionURL: URL(string: "tel://\(item.number)")
+                            )
+                        }
+
+                        emergencySectionTitle("Find Nearby")
+                        ForEach(nearbyServices) { service in
+                            EmergencyActionRow(
+                                systemImage: service.systemImage,
+                                iconColor: service.color,
+                                title: service.title,
+                                subtitle: "Open nearby results in Maps",
+                                actionTitle: "Map",
+                                actionImage: "map.fill",
+                                actionURL: mapsSearchURL(for: service.query)
+                            )
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
                 }
-                .scrollContentBackground(.hidden)
-                .navigationTitle(localized("Emergency", language: viewModel.language))
-                .toolbar { Button(localized("Home", language: viewModel.language)) { viewModel.showDashboard() } }
+                .navigationTitle("Emergency Help")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    Button(localized("Home", language: viewModel.language)) {
+                        viewModel.showDashboard()
+                    }
+                }
             }
         }
+    }
+
+    private var emergencyNumbers: [EmergencyNumber] {
+        [
+            EmergencyNumber(title: "National Emergency", subtitle: "Police, fire, medical", number: "112", systemImage: "phone.fill", color: Color(red: 0.90, green: 0.22, blue: 0.20)),
+            EmergencyNumber(title: "Ambulance", subtitle: "Medical emergency", number: "108", systemImage: "cross.case.fill", color: Color(red: 0.85, green: 0.10, blue: 0.38)),
+            EmergencyNumber(title: "Police", subtitle: "Immediate police help", number: "100", systemImage: "shield.lefthalf.filled", color: Color(red: 0.22, green: 0.29, blue: 0.68)),
+            EmergencyNumber(title: "Fire", subtitle: "Fire emergency", number: "101", systemImage: "flame.fill", color: Color(red: 0.96, green: 0.32, blue: 0.12)),
+            EmergencyNumber(title: "Women Helpline", subtitle: "Emergency support", number: "1091", systemImage: "phone.badge.waveform.fill", color: Color(red: 0.56, green: 0.14, blue: 0.67)),
+            EmergencyNumber(title: "Railway Helpline", subtitle: "Railway enquiry/help", number: "139", systemImage: "tram.fill", color: Color(red: 0.00, green: 0.54, blue: 0.48))
+        ]
+    }
+
+    private var nearbyServices: [NearbyService] {
+        [
+            NearbyService(title: "Nearby Hospitals", query: "hospital near me", systemImage: "cross.case.fill", color: Color(red: 0.85, green: 0.10, blue: 0.38)),
+            NearbyService(title: "Nearby Ambulance", query: "ambulance service near me", systemImage: "cross.fill", color: Color(red: 0.90, green: 0.22, blue: 0.20)),
+            NearbyService(title: "Nearby Fire Station", query: "fire station near me", systemImage: "flame.fill", color: Color(red: 0.96, green: 0.32, blue: 0.12)),
+            NearbyService(title: "Nearby Police Station", query: "police station near me", systemImage: "shield.lefthalf.filled", color: Color(red: 0.22, green: 0.29, blue: 0.68)),
+            NearbyService(title: "Nearby Railway Station", query: "railway station near me", systemImage: "tram.fill", color: Color(red: 0.00, green: 0.54, blue: 0.48))
+        ]
+    }
+
+    private var locationStatusCard: some View {
+        let hasSavedLocation = viewModel.currentUser?.latitude != nil && viewModel.currentUser?.longitude != nil
+        return HStack(spacing: 12) {
+            Image(systemName: hasSavedLocation ? "location.fill" : "location.slash.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(hasSavedLocation ? AndroidLook.accentGold : .secondary)
+                .frame(width: 44, height: 44)
+                .background(Color.white.opacity(0.58), in: Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(hasSavedLocation ? "Location ready" : "Location needed for nearby search")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AndroidLook.deepBrown)
+                Text(hasSavedLocation ? "Nearby searches will open in Maps." : "Nearby searches will still open in Maps, but may need your location there.")
+                    .font(.caption)
+                    .foregroundStyle(AndroidLook.mutedBrown)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+    }
+
+    private func emergencySectionTitle(_ title: String) -> some View {
+        Text(title)
+            .font(.headline.weight(.bold))
+            .foregroundStyle(AndroidLook.deepBrown)
+            .padding(.top, 4)
+    }
+
+    private func mapsSearchURL(for query: String) -> URL? {
+        var components = URLComponents(string: "https://maps.apple.com/")
+        var items = [URLQueryItem(name: "q", value: query)]
+        if let latitude = viewModel.currentUser?.latitude,
+           let longitude = viewModel.currentUser?.longitude {
+            items.append(URLQueryItem(name: "sll", value: "\(latitude),\(longitude)"))
+        }
+        components?.queryItems = items
+        return components?.url
+    }
+}
+
+private struct EmergencyNumber: Identifiable {
+    let id = UUID()
+    let title: String
+    let subtitle: String
+    let number: String
+    let systemImage: String
+    let color: Color
+}
+
+private struct NearbyService: Identifiable {
+    let id = UUID()
+    let title: String
+    let query: String
+    let systemImage: String
+    let color: Color
+}
+
+private struct EmergencyActionRow: View {
+    let systemImage: String
+    let iconColor: Color
+    let title: String
+    let subtitle: String
+    let actionTitle: String
+    let actionImage: String
+    let actionURL: URL?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(iconColor)
+                .frame(width: 44, height: 44)
+                .background(iconColor.opacity(0.14), in: Circle())
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(AndroidLook.deepBrown)
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(AndroidLook.mutedBrown)
+                    .lineLimit(2)
+            }
+
+            Spacer()
+
+            if let actionURL {
+                Link(destination: actionURL) {
+                    HStack(spacing: 6) {
+                        Image(systemName: actionImage)
+                        Text(actionTitle)
+                            }
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(AndroidLook.deepBrown)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(AndroidLook.accentGold, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
     }
 }
 
@@ -6500,7 +6863,7 @@ private struct StatTile: View {
         }
         .padding(max(10.0, 12.0 * layoutScale))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous))
+        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -6520,7 +6883,7 @@ private struct DashboardActionLabel<Background: ShapeStyle>: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(Color.white)
+                .fill(Color.white.opacity(0.58))
 
             VStack(alignment: .center, spacing: max(7.0, 8.0 * layoutScale)) {
                 ZStack {

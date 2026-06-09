@@ -82,6 +82,7 @@ enum MockSocialData {
                 comments: [
                     PostComment(id: "rc1", userId: "A112", userName: "Varun Vijay Gulab Chand", text: "This is still the best breakfast.", timestamp: .now.addingTimeInterval(-65_000))
                 ],
+                status: "APPROVED",
                 timestamp: .now.addingTimeInterval(-129_600)
             ),
             Recipe(
@@ -96,6 +97,7 @@ enum MockSocialData {
                 imageURL: "",
                 reactions: [:],
                 comments: [],
+                status: "APPROVED",
                 timestamp: .now.addingTimeInterval(-86_400)
             )
         ]
@@ -114,6 +116,7 @@ enum MockSocialData {
                 comments: [
                     PostComment(id: "tc1", userId: "A111", userName: "Prachi Vijay Gulab Chand", text: "This keeps everyone connected.", timestamp: .now.addingTimeInterval(-54_000))
                 ],
+                status: "APPROVED",
                 timestamp: .now.addingTimeInterval(-172_800)
             ),
             Tradition(
@@ -125,6 +128,7 @@ enum MockSocialData {
                 imageURL: "",
                 reactions: [:],
                 comments: [],
+                status: "APPROVED",
                 timestamp: .now.addingTimeInterval(-259_200)
             )
         ]
@@ -146,7 +150,8 @@ enum MockSocialData {
                 visibilityType: "GLOBAL",
                 familyContextId: "",
                 reactions: ["🙏": ["A111"]],
-                comments: []
+                comments: [],
+                status: "APPROVED"
             ),
             Milestone(
                 id: "milestone-2",
@@ -162,7 +167,8 @@ enum MockSocialData {
                 visibilityType: "GLOBAL",
                 familyContextId: "",
                 reactions: [:],
-                comments: []
+                comments: [],
+                status: "APPROVED"
             )
         ]
     }

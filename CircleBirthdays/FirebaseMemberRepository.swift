@@ -29,6 +29,21 @@ struct FirebaseMemberRepository: MemberRepository {
         #endif
     }
 
+    func deletePendingMember(userID: String) async throws {
+        #if canImport(FirebaseFirestore)
+        guard FirebaseBootstrap.isConfigured else {
+            throw FirebaseRepositoryError.notConfigured
+        }
+
+        try await Firestore.firestore()
+            .collection("pending_updates")
+            .document(userID)
+            .delete()
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
     func updatePushToken(userID: String, token: String, toPending: Bool) async throws {
         #if canImport(FirebaseFirestore)
         guard FirebaseBootstrap.isConfigured else {
@@ -60,6 +75,21 @@ struct FirebaseMemberRepository: MemberRepository {
         #endif
     }
 
+    func updateLastLoggedIn(userID: String, timestamp: Int64) async throws {
+        #if canImport(FirebaseFirestore)
+        guard FirebaseBootstrap.isConfigured else {
+            throw FirebaseRepositoryError.notConfigured
+        }
+
+        try await Firestore.firestore()
+            .collection("members")
+            .document(userID)
+            .setData(["lastLoggedIn": timestamp], merge: true)
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
     func fetchRelationshipOverrides() async throws -> [RelationshipOverride] {
         #if canImport(FirebaseFirestore)
         guard FirebaseBootstrap.isConfigured else {
@@ -68,10 +98,11 @@ struct FirebaseMemberRepository: MemberRepository {
 
         let snapshot = try await Firestore.firestore()
             .collection("relationship_overrides")
-            .whereField("status", isEqualTo: "PENDING")
             .getDocuments()
 
-        return snapshot.documents.compactMap(RelationshipOverride.init(document:))
+        return snapshot.documents
+            .compactMap(RelationshipOverride.init(document:))
+            .filter { $0.status.uppercased() == "PENDING" }
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif

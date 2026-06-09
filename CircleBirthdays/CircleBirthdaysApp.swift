@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 @main
 struct CircleBirthdaysApp: App {
@@ -13,6 +14,19 @@ struct CircleBirthdaysApp: App {
 
     init() {
         FirebaseBootstrap.configureIfPossible()
+        configureTransparentContainers()
+    }
+
+    private func configureTransparentContainers() {
+        let transparentNavigationBar = UINavigationBarAppearance()
+        transparentNavigationBar.configureWithTransparentBackground()
+
+        UINavigationBar.appearance().isTranslucent = true
+        UINavigationBar.appearance().backgroundColor = .clear
+        UINavigationBar.appearance().standardAppearance = transparentNavigationBar
+        UINavigationBar.appearance().scrollEdgeAppearance = transparentNavigationBar
+        UITableView.appearance().backgroundColor = .clear
+        UICollectionView.appearance().backgroundColor = .clear
     }
 
     var body: some Scene {

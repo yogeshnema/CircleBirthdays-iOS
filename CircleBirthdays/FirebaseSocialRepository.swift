@@ -73,9 +73,11 @@ struct FirebaseSocialRepository: SocialRepository {
     func fetchDeletionRequests() async throws -> [DeletionRequest] {
         #if canImport(FirebaseFirestore)
         let snapshot = try await firestore.collection("deletion_requests")
-            .whereField("status", isEqualTo: "PENDING")
             .getDocuments()
-        return snapshot.documents.compactMap(DeletionRequest.init(document:)).sorted { $0.timestamp > $1.timestamp }
+        return snapshot.documents
+            .compactMap(DeletionRequest.init(document:))
+            .filter { $0.status.uppercased() == "PENDING" }
+            .sorted { $0.timestamp > $1.timestamp }
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif
@@ -230,6 +232,16 @@ struct FirebaseSocialRepository: SocialRepository {
     func deleteMemory(memoryID: String) async throws {
         #if canImport(FirebaseFirestore)
         try await firestore.collection("memories").document(memoryID).delete()
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
+    func updateMemoryCaption(memoryID: String, caption: String) async throws {
+        #if canImport(FirebaseFirestore)
+        try await firestore.collection("memories")
+            .document(memoryID)
+            .setData(["caption": caption], merge: true)
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif
@@ -795,6 +807,7 @@ private extension Recipe {
             "imageUrl": imageURL,
             "reactions": reactions,
             "comments": comments.map { $0.firestoreData },
+            "status": status,
             "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000)
         ]
     }
@@ -833,6 +846,7 @@ private extension Recipe {
             imageURL: data["imageUrl"] as? String ?? "",
             reactions: reactions,
             comments: comments,
+            status: data["status"] as? String ?? "APPROVED",
             timestamp: Self.dateValue(from: data["timestamp"])
         )
     }
@@ -866,6 +880,7 @@ private extension Tradition {
             "imageUrl": imageURL,
             "reactions": reactions,
             "comments": comments.map { $0.firestoreData },
+            "status": status,
             "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000)
         ]
     }
@@ -885,6 +900,7 @@ private extension Tradition {
             imageURL: data["imageUrl"] as? String ?? "",
             reactions: MemoryPost.parseReactions(data["reactions"]),
             comments: MemoryPost.parseComments(data["comments"]),
+            status: data["status"] as? String ?? "APPROVED",
             timestamp: Self.dateValue(from: data["timestamp"])
         )
     }
@@ -910,7 +926,8 @@ private extension Milestone {
             "visibilityType": visibilityType,
             "familyContextId": familyContextId,
             "reactions": reactions,
-            "comments": comments.map { $0.firestoreData }
+            "comments": comments.map { $0.firestoreData },
+            "status": status
         ]
     }
 }
@@ -934,7 +951,8 @@ private extension Milestone {
             visibilityType: data["visibilityType"] as? String ?? "GLOBAL",
             familyContextId: data["familyContextId"] as? String ?? "",
             reactions: MemoryPost.parseReactions(data["reactions"]),
-            comments: MemoryPost.parseComments(data["comments"])
+            comments: MemoryPost.parseComments(data["comments"]),
+            status: data["status"] as? String ?? "APPROVED"
         )
     }
 }
@@ -989,8 +1007,8 @@ private extension DeletionRequest {
         guard let title = data["title"] as? String else { return nil }
         self.init(
             id: document.documentID,
-            collectionName: data["collectionName"] as? String ?? "",
-            docId: data["docId"] as? String ?? "",
+            collectionName: data["collectionName"] as? String ?? data["collection"] as? String ?? data["targetCollection"] as? String ?? "",
+            docId: data["docId"] as? String ?? data["itemId"] as? String ?? data["targetId"] as? String ?? data["postId"] as? String ?? "",
             title: title,
             reason: data["reason"] as? String ?? "",
             requestedBy: data["requestedBy"] as? String ?? "",
@@ -1004,7 +1022,12 @@ private extension DeletionRequest {
         [
             "id": id,
             "collectionName": collectionName,
+            "collection": collectionName,
+            "targetCollection": collectionName,
             "docId": docId,
+            "itemId": docId,
+            "targetId": docId,
+            "postId": docId,
             "title": title,
             "reason": reason,
             "requestedBy": requestedBy,

@@ -62,6 +62,8 @@ struct MockSocialRepository: SocialRepository {
 
     func deleteMemory(memoryID: String) async throws {}
 
+    func updateMemoryCaption(memoryID: String, caption: String) async throws {}
+
     func toggleMemoryReaction(memoryID: String, emoji: String, userID: String) async throws {}
 
     func addMemoryComment(memoryID: String, comment: PostComment) async throws {}

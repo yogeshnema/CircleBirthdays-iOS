@@ -164,9 +164,13 @@ struct MockMemberRepository: MemberRepository {
 
     func saveMember(_ member: Member, toPending: Bool) async throws {}
 
+    func deletePendingMember(userID: String) async throws {}
+
     func updatePushToken(userID: String, token: String, toPending: Bool) async throws {}
 
     func updatePassword(userID: String, passwordHash: String) async throws {}
+
+    func updateLastLoggedIn(userID: String, timestamp: Int64) async throws {}
 
     func fetchRelationshipOverrides() async throws -> [RelationshipOverride] {
         [

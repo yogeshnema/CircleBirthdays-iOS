@@ -206,6 +206,10 @@ final class AppViewModel {
         dashboardPendingMembers.count
     }
 
+    var approvalPendingCount: Int {
+        pendingCount + pendingOverrideCount + pendingDeletionCount
+    }
+
     var dashboardPendingMembers: [Member] {
         pendingMembers.filter { member in
             currentTreeId == "primary"
@@ -261,7 +265,10 @@ final class AppViewModel {
     }
 
     var visibleRecipes: [Recipe] {
-        recipes.sorted { $0.timestamp > $1.timestamp }
+        let isAdmin = hasAdminPrivileges
+        return recipes
+            .filter { isAdmin || $0.status == "APPROVED" }
+            .sorted { $0.timestamp > $1.timestamp }
     }
 
     var hasAdminPrivileges: Bool {
@@ -274,11 +281,15 @@ final class AppViewModel {
     }
 
     var visibleTraditions: [Tradition] {
-        traditions.sorted { $0.timestamp > $1.timestamp }
+        let isAdmin = hasAdminPrivileges
+        return traditions
+            .filter { isAdmin || $0.status == "APPROVED" }
+            .sorted { $0.timestamp > $1.timestamp }
     }
 
     var visibleMilestones: [Milestone] {
-        milestones.sorted {
+        let isAdmin = hasAdminPrivileges
+        return milestones.filter { isAdmin || $0.status == "APPROVED" }.sorted {
             let lhsYear = Int($0.year) ?? 0
             let rhsYear = Int($1.year) ?? 0
             if lhsYear == rhsYear {
@@ -541,16 +552,20 @@ final class AppViewModel {
             return
         }
 
-        currentUser = user
+        let loginTimestamp = Int64(Date().timeIntervalSince1970 * 1000)
+        let loggedInUser = memberWithUpdatedLogin(user, timestamp: loginTimestamp)
+        currentUser = loggedInUser
         if !user.secondaryTreeEnabled, currentTreeId != "primary" {
             switchTree("primary")
         }
         currentScreen = .dashboard
-        saveSession(for: user)
+        replaceLocalMember(loggedInUser)
+        saveSession(for: loggedInUser)
         syncCurrentUserPushToken()
         startInboxRefreshLoop()
         startAutoRefreshLoop()
         Task {
+            try? await memberRepository.updateLastLoggedIn(userID: user.id, timestamp: loginTimestamp)
             await refreshInbox()
             await refreshNotifications()
         }
@@ -730,9 +745,21 @@ final class AppViewModel {
             || currentUser.id == member.id
     }
 
+    func canManageContent(authorId: String) -> Bool {
+        hasAdminPrivileges
+    }
+
+    func canRequestContentDeletion(authorId: String) -> Bool {
+        hasAdminPrivileges || currentUser?.id == authorId
+    }
+
+    var newContentStatus: String {
+        hasAdminPrivileges ? "APPROVED" : "PENDING"
+    }
+
     func savesMemberEditsDirectly(_ member: Member) -> Bool {
         guard let currentUser else { return false }
-        return isPrimaryAdminLogin || currentUser.isEditor || currentUser.id == member.id
+        return isPrimaryAdminLogin || currentUser.isEditor
     }
 
     private func isFamilyProfileBelow(_ member: Member, currentUser: Member) -> Bool {
@@ -820,14 +847,16 @@ final class AppViewModel {
             } else {
                 recipes.append(recipe)
             }
-            let recipients = activeMembers.map(\.id).filter { $0 != recipe.authorId }
-            await PushNotificationCoordinator.shared.queueNotification(
-                title: "New recipe shared",
-                body: recipe.title,
-                recipientIDs: recipients,
-                category: "recipe",
-                referenceID: recipe.id
-            )
+            if recipe.status == "APPROVED" {
+                let recipients = activeMembers.map(\.id).filter { $0 != recipe.authorId }
+                await PushNotificationCoordinator.shared.queueNotification(
+                    title: "New recipe shared",
+                    body: recipe.title,
+                    recipientIDs: recipients,
+                    category: "recipe",
+                    referenceID: recipe.id
+                )
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -862,14 +891,16 @@ final class AppViewModel {
                 memories.append(memory)
             }
 
-            let recipients = activeMembers.map(\.id).filter { $0 != memory.userId }
-            await PushNotificationCoordinator.shared.queueNotification(
-                title: "New photo shared",
-                body: memory.caption.isEmpty ? memory.userName : memory.caption,
-                recipientIDs: recipients,
-                category: "gallery",
-                referenceID: memory.id
-            )
+            if memory.status == "APPROVED" {
+                let recipients = activeMembers.map(\.id).filter { $0 != memory.userId }
+                await PushNotificationCoordinator.shared.queueNotification(
+                    title: "New photo shared",
+                    body: memory.caption.isEmpty ? memory.userName : memory.caption,
+                    recipientIDs: recipients,
+                    category: "gallery",
+                    referenceID: memory.id
+                )
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -879,6 +910,31 @@ final class AppViewModel {
         do {
             try await socialRepository.deleteMemory(memoryID: memory.id)
             memories.removeAll { $0.id == memory.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func updateMemoryCaption(_ memory: MemoryPost, caption: String) async {
+        guard currentUser?.id == memory.userId || hasAdminPrivileges else { return }
+        let trimmed = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        do {
+            try await socialRepository.updateMemoryCaption(memoryID: memory.id, caption: trimmed)
+            if let index = memories.firstIndex(where: { $0.id == memory.id }) {
+                let updated = memories[index]
+                memories[index] = MemoryPost(
+                    id: updated.id,
+                    userId: updated.userId,
+                    userName: updated.userName,
+                    imageURL: updated.imageURL,
+                    caption: trimmed,
+                    timestamp: updated.timestamp,
+                    status: updated.status,
+                    reactions: updated.reactions,
+                    comments: updated.comments
+                )
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -984,6 +1040,7 @@ final class AppViewModel {
                     imageURL: updated.imageURL,
                     reactions: reactions,
                     comments: updated.comments,
+                    status: updated.status,
                     timestamp: updated.timestamp
                 )
                 recipes[index] = updated
@@ -1021,6 +1078,7 @@ final class AppViewModel {
                     imageURL: updated.imageURL,
                     reactions: updated.reactions,
                     comments: updated.comments + [comment],
+                    status: updated.status,
                     timestamp: updated.timestamp
                 )
                 recipes[index] = updated
@@ -1038,14 +1096,16 @@ final class AppViewModel {
             } else {
                 traditions.append(tradition)
             }
-            let recipients = activeMembers.map(\.id).filter { $0 != tradition.authorId }
-            await PushNotificationCoordinator.shared.queueNotification(
-                title: "New tradition shared",
-                body: tradition.title,
-                recipientIDs: recipients,
-                category: "tradition",
-                referenceID: tradition.id
-            )
+            if tradition.status == "APPROVED" {
+                let recipients = activeMembers.map(\.id).filter { $0 != tradition.authorId }
+                await PushNotificationCoordinator.shared.queueNotification(
+                    title: "New tradition shared",
+                    body: tradition.title,
+                    recipientIDs: recipients,
+                    category: "tradition",
+                    referenceID: tradition.id
+                )
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1074,6 +1134,7 @@ final class AppViewModel {
                     imageURL: updated.imageURL,
                     reactions: reactions,
                     comments: updated.comments,
+                    status: updated.status,
                     timestamp: updated.timestamp
                 )
                 traditions[index] = updated
@@ -1108,6 +1169,7 @@ final class AppViewModel {
                     imageURL: updated.imageURL,
                     reactions: updated.reactions,
                     comments: updated.comments + [comment],
+                    status: updated.status,
                     timestamp: updated.timestamp
                 )
             }
@@ -1133,14 +1195,16 @@ final class AppViewModel {
             } else {
                 discussions.append(discussion)
             }
-            let recipients = activeMembers.map(\.id).filter { $0 != discussion.userId }
-            await PushNotificationCoordinator.shared.queueNotification(
-                title: "New discussion",
-                body: discussion.title,
-                recipientIDs: recipients,
-                category: "discussion",
-                referenceID: discussion.id
-            )
+            if discussion.status == "APPROVED" {
+                let recipients = activeMembers.map(\.id).filter { $0 != discussion.userId }
+                await PushNotificationCoordinator.shared.queueNotification(
+                    title: "New discussion",
+                    body: discussion.title,
+                    recipientIDs: recipients,
+                    category: "discussion",
+                    referenceID: discussion.id
+                )
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1154,14 +1218,16 @@ final class AppViewModel {
             } else {
                 milestones.append(milestone)
             }
-            let recipients = activeMembers.map(\.id).filter { $0 != milestone.authorId }
-            await PushNotificationCoordinator.shared.queueNotification(
-                title: "New milestone shared",
-                body: milestone.title,
-                recipientIDs: recipients,
-                category: "milestone",
-                referenceID: milestone.id
-            )
+            if milestone.status == "APPROVED" {
+                let recipients = activeMembers.map(\.id).filter { $0 != milestone.authorId }
+                await PushNotificationCoordinator.shared.queueNotification(
+                    title: "New milestone shared",
+                    body: milestone.title,
+                    recipientIDs: recipients,
+                    category: "milestone",
+                    referenceID: milestone.id
+                )
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1174,6 +1240,103 @@ final class AppViewModel {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func approveMemory(_ memory: MemoryPost) async {
+        guard hasAdminPrivileges else { return }
+        await saveMemory(
+            MemoryPost(
+                id: memory.id,
+                userId: memory.userId,
+                userName: memory.userName,
+                imageURL: memory.imageURL,
+                caption: memory.caption,
+                timestamp: memory.timestamp,
+                status: "APPROVED",
+                reactions: memory.reactions,
+                comments: memory.comments
+            )
+        )
+    }
+
+    func approveDiscussion(_ discussion: DiscussionThread) async {
+        guard hasAdminPrivileges else { return }
+        await saveDiscussion(
+            DiscussionThread(
+                id: discussion.id,
+                userId: discussion.userId,
+                userName: discussion.userName,
+                type: discussion.type,
+                title: discussion.title,
+                content: discussion.content,
+                pollOptions: discussion.pollOptions,
+                timestamp: discussion.timestamp,
+                status: "APPROVED",
+                comments: discussion.comments
+            )
+        )
+    }
+
+    func approveRecipe(_ recipe: Recipe) async {
+        guard hasAdminPrivileges else { return }
+        await saveRecipe(
+            Recipe(
+                id: recipe.id,
+                title: recipe.title,
+                authorId: recipe.authorId,
+                authorName: recipe.authorName,
+                category: recipe.category,
+                description: recipe.description,
+                ingredients: recipe.ingredients,
+                instructions: recipe.instructions,
+                imageURL: recipe.imageURL,
+                reactions: recipe.reactions,
+                comments: recipe.comments,
+                status: "APPROVED",
+                timestamp: recipe.timestamp
+            )
+        )
+    }
+
+    func approveTradition(_ tradition: Tradition) async {
+        guard hasAdminPrivileges else { return }
+        await saveTradition(
+            Tradition(
+                id: tradition.id,
+                title: tradition.title,
+                authorId: tradition.authorId,
+                authorName: tradition.authorName,
+                description: tradition.description,
+                imageURL: tradition.imageURL,
+                reactions: tradition.reactions,
+                comments: tradition.comments,
+                status: "APPROVED",
+                timestamp: tradition.timestamp
+            )
+        )
+    }
+
+    func approveMilestone(_ milestone: Milestone) async {
+        guard hasAdminPrivileges else { return }
+        await saveMilestone(
+            Milestone(
+                id: milestone.id,
+                title: milestone.title,
+                description: milestone.description,
+                year: milestone.year,
+                imageURL: milestone.imageURL,
+                audioURL: milestone.audioURL,
+                location: milestone.location,
+                timestamp: milestone.timestamp,
+                authorId: milestone.authorId,
+                authorName: milestone.authorName,
+                visibilityType: milestone.visibilityType,
+                familyContextId: milestone.familyContextId,
+                reactions: milestone.reactions,
+                comments: milestone.comments,
+                status: "APPROVED"
+            )
+        )
     }
 
     func toggleMilestoneReaction(_ milestone: Milestone, emoji: String) async {
@@ -1204,7 +1367,8 @@ final class AppViewModel {
                     visibilityType: updated.visibilityType,
                     familyContextId: updated.familyContextId,
                     reactions: reactions,
-                    comments: updated.comments
+                    comments: updated.comments,
+                    status: updated.status
                 )
                 milestones[index] = updated
             }
@@ -1243,7 +1407,8 @@ final class AppViewModel {
                     visibilityType: updated.visibilityType,
                     familyContextId: updated.familyContextId,
                     reactions: updated.reactions,
-                    comments: updated.comments + [comment]
+                    comments: updated.comments + [comment],
+                    status: updated.status
                 )
             }
         } catch {
@@ -1282,6 +1447,7 @@ final class AppViewModel {
 
         let savesDirectly = savesMemberEditsDirectly(member)
         let existingMember = (members + pendingMembers).first { $0.id == member.id }
+        let wasPendingApproval = pendingMembers.contains { $0.id == member.id }
         let relationshipRequested = !savesDirectly && member.relationship != existingMember?.relationship
         let finalMember = Member(
             id: member.id,
@@ -1300,16 +1466,31 @@ final class AppViewModel {
             photoURL: member.photoURL,
             immediateFamily: member.immediateFamily,
             address: member.address,
+            latitude: member.latitude,
+            longitude: member.longitude,
+            flatNumber: member.flatNumber,
+            floor: member.floor,
+            landmark: member.landmark,
             password: member.password,
             isAdmin: member.isAdmin,
             isEditor: member.isEditor,
+            isPrimaryTree: member.isPrimaryTree,
+            secondaryTreeEnabled: member.secondaryTreeEnabled,
+            treeId: member.treeId,
             status: savesDirectly ? "APPROVED" : "PENDING",
             lastLoggedIn: member.lastLoggedIn,
             relationship: member.relationship,
             fcmToken: member.fcmToken,
             facebookURL: member.facebookURL,
             instagramURL: member.instagramURL,
-            youtubeURL: member.youtubeURL
+            youtubeURL: member.youtubeURL,
+            manualRelationships: member.manualRelationships,
+            requestedBy: savesDirectly ? nil : currentUser.id,
+            requestedByName: savesDirectly ? nil : currentUser.name,
+            requestedRelationship: relationshipRequested ? member.relationship : member.requestedRelationship,
+            points: member.points,
+            level: member.level,
+            badges: member.badges
         )
 
         let finalWithRequester = relationshipRequested
@@ -1330,9 +1511,17 @@ final class AppViewModel {
                 photoURL: finalMember.photoURL,
                 immediateFamily: finalMember.immediateFamily,
                 address: finalMember.address,
+                latitude: finalMember.latitude,
+                longitude: finalMember.longitude,
+                flatNumber: finalMember.flatNumber,
+                floor: finalMember.floor,
+                landmark: finalMember.landmark,
                 password: finalMember.password,
                 isAdmin: finalMember.isAdmin,
                 isEditor: finalMember.isEditor,
+                isPrimaryTree: finalMember.isPrimaryTree,
+                secondaryTreeEnabled: finalMember.secondaryTreeEnabled,
+                treeId: finalMember.treeId,
                 status: finalMember.status,
                 lastLoggedIn: finalMember.lastLoggedIn,
                 relationship: finalMember.relationship,
@@ -1343,12 +1532,18 @@ final class AppViewModel {
                 manualRelationships: finalMember.manualRelationships,
                 requestedBy: currentUser.id,
                 requestedByName: currentUser.name,
-                requestedRelationship: member.relationship
+                requestedRelationship: member.relationship,
+                points: finalMember.points,
+                level: finalMember.level,
+                badges: finalMember.badges
             )
             : finalMember
 
         do {
             try await memberRepository.saveMember(finalWithRequester, toPending: !savesDirectly)
+            if savesDirectly && wasPendingApproval {
+                try await memberRepository.deletePendingMember(userID: finalMember.id)
+            }
 
             if savesDirectly {
                 if let index = members.firstIndex(where: { $0.id == finalMember.id }) {
@@ -1365,7 +1560,7 @@ final class AppViewModel {
                 }
             }
 
-            if currentUser.id == finalMember.id {
+            if savesDirectly && currentUser.id == finalMember.id {
                 self.currentUser = finalWithRequester
             }
         } catch {
@@ -1483,10 +1678,10 @@ final class AppViewModel {
         do {
             let hashed = Self.sha256(trimmed)
             try await memberRepository.updatePassword(userID: currentUser.id, passwordHash: hashed)
-            self.currentUser = currentUser.copy(password: hashed)
             if let index = members.firstIndex(where: { $0.id == currentUser.id }) {
                 members[index] = members[index].copy(password: hashed)
             }
+            logout()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -1540,6 +1735,52 @@ final class AppViewModel {
         if currentUser?.id == member.id {
             currentUser = member
         }
+    }
+
+    private func memberWithUpdatedLogin(_ member: Member, timestamp: Int64) -> Member {
+        Member(
+            id: member.id,
+            familyId: member.familyId,
+            name: member.name,
+            gender: member.gender,
+            dateOfBirth: member.dateOfBirth,
+            phoneNumber: member.phoneNumber,
+            email: member.email,
+            location: member.location,
+            spouseName: member.spouseName,
+            fatherName: member.fatherName,
+            motherName: member.motherName,
+            marriageDate: member.marriageDate,
+            bereavementDate: member.bereavementDate,
+            photoURL: member.photoURL,
+            immediateFamily: member.immediateFamily,
+            address: member.address,
+            latitude: member.latitude,
+            longitude: member.longitude,
+            flatNumber: member.flatNumber,
+            floor: member.floor,
+            landmark: member.landmark,
+            password: member.password,
+            isAdmin: member.isAdmin,
+            isEditor: member.isEditor,
+            isPrimaryTree: member.isPrimaryTree,
+            secondaryTreeEnabled: member.secondaryTreeEnabled,
+            treeId: member.treeId,
+            status: member.status,
+            lastLoggedIn: timestamp,
+            relationship: member.relationship,
+            fcmToken: member.fcmToken,
+            facebookURL: member.facebookURL,
+            instagramURL: member.instagramURL,
+            youtubeURL: member.youtubeURL,
+            manualRelationships: member.manualRelationships,
+            requestedBy: member.requestedBy,
+            requestedByName: member.requestedByName,
+            requestedRelationship: member.requestedRelationship,
+            points: member.points,
+            level: member.level,
+            badges: member.badges
+        )
     }
 
     private func adminUpdatedMember(
