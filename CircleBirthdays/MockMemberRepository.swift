@@ -172,6 +172,28 @@ struct MockMemberRepository: MemberRepository {
 
     func updateLastLoggedIn(userID: String, timestamp: Int64) async throws {}
 
+    func fetchSignupRequests() async throws -> [SignupRequest] {
+        [
+            SignupRequest(
+                id: "signup-A431",
+                name: "Parv Naman",
+                parentName: "Manoj Purushottam",
+                mobileNumber: "9000012345",
+                email: "parv@example.com",
+                status: "PENDING",
+                requestedAt: Int64(Date().timeIntervalSince1970 * 1000),
+                suggestedMemberID: "A431",
+                suggestedMemberName: "Parv (Naman) Manoj Purushottam"
+            )
+        ]
+    }
+
+    func submitSignupRequest(_ request: SignupRequest) async throws {}
+
+    func updateSignupRequest(_ request: SignupRequest) async throws {}
+
+    func deleteSignupRequest(requestID: String) async throws {}
+
     func fetchRelationshipOverrides() async throws -> [RelationshipOverride] {
         [
             RelationshipOverride(

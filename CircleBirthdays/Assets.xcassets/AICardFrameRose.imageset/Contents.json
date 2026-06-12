@@ -1,0 +1,12 @@
+{
+  "images" : [
+    {
+      "filename" : "ai_card_frame_rose.png",
+      "idiom" : "universal"
+    }
+  ],
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  }
+}

@@ -21,6 +21,25 @@ struct MockSocialRepository: SocialRepository {
         MockSocialData.milestones()
     }
 
+    func fetchBusinesses() async throws -> [FamilyBusiness] {
+        [
+            FamilyBusiness(
+                id: "mock-business-1",
+                name: "Purawale Events",
+                ownerName: "Family Admin",
+                contactNumber: "9999999999",
+                type: "Event Hall",
+                address: "Indore",
+                locationLink: "",
+                latitude: nil,
+                longitude: nil,
+                addedBy: "admin",
+                treeId: "primary",
+                timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+            )
+        ]
+    }
+
     func fetchDeletionRequests() async throws -> [DeletionRequest] {
         [
             DeletionRequest(
@@ -58,6 +77,8 @@ struct MockSocialRepository: SocialRepository {
 
     func submitDiscussion(_ discussion: DiscussionThread) async throws {}
 
+    func deleteDiscussion(discussionID: String) async throws {}
+
     func submitMemory(_ memory: MemoryPost) async throws {}
 
     func deleteMemory(memoryID: String) async throws {}
@@ -91,6 +112,10 @@ struct MockSocialRepository: SocialRepository {
     func toggleMilestoneReaction(milestoneID: String, emoji: String, userID: String) async throws {}
 
     func addMilestoneComment(milestoneID: String, comment: PostComment) async throws {}
+
+    func submitBusiness(_ business: FamilyBusiness, treeId: String) async throws {}
+
+    func deleteBusiness(businessID: String) async throws {}
 
     func submitDeletionRequest(_ request: DeletionRequest) async throws {}
 

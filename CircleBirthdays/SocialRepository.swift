@@ -11,6 +11,7 @@ protocol SocialRepository {
     func fetchRecipes() async throws -> [Recipe]
     func fetchTraditions() async throws -> [Tradition]
     func fetchMilestones() async throws -> [Milestone]
+    func fetchBusinesses() async throws -> [FamilyBusiness]
     func fetchDeletionRequests() async throws -> [DeletionRequest]
     func fetchInbox(for userID: String) async throws -> SocialInbox
     func sendMessage(_ message: ChatMessage) async throws
@@ -18,6 +19,7 @@ protocol SocialRepository {
     func uploadImageData(_ data: Data, folder: String) async throws -> String
     func uploadAudioData(_ data: Data, folder: String, fileExtension: String) async throws -> String
     func submitDiscussion(_ discussion: DiscussionThread) async throws
+    func deleteDiscussion(discussionID: String) async throws
     func submitMemory(_ memory: MemoryPost) async throws
     func deleteMemory(memoryID: String) async throws
     func updateMemoryCaption(memoryID: String, caption: String) async throws
@@ -35,6 +37,8 @@ protocol SocialRepository {
     func deleteMilestone(milestoneID: String) async throws
     func toggleMilestoneReaction(milestoneID: String, emoji: String, userID: String) async throws
     func addMilestoneComment(milestoneID: String, comment: PostComment) async throws
+    func submitBusiness(_ business: FamilyBusiness, treeId: String) async throws
+    func deleteBusiness(businessID: String) async throws
     func submitDeletionRequest(_ request: DeletionRequest) async throws
     func resolveDeletionRequest(_ request: DeletionRequest, approved: Bool) async throws
     func fetchActiveGameSessions() async throws -> [GameSession]

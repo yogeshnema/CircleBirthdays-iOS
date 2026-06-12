@@ -36,6 +36,14 @@ struct FirebaseSocialRepository: SocialRepository {
         #endif
     }
 
+    func deleteDiscussion(discussionID: String) async throws {
+        #if canImport(FirebaseFirestore)
+        try await firestore.collection("discussions").document(discussionID).delete()
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
     func fetchRecipes() async throws -> [Recipe] {
         #if canImport(FirebaseFirestore)
         let snapshot = try await firestore.collection("recipes").getDocuments()
@@ -65,6 +73,15 @@ struct FirebaseSocialRepository: SocialRepository {
             }
             return lhsYear < rhsYear
         }
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
+    func fetchBusinesses() async throws -> [FamilyBusiness] {
+        #if canImport(FirebaseFirestore)
+        let snapshot = try await firestore.collection("businesses").getDocuments()
+        return snapshot.documents.compactMap(FamilyBusiness.init(document:)).sorted { $0.timestamp > $1.timestamp }
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif
@@ -252,14 +269,7 @@ struct FirebaseSocialRepository: SocialRepository {
         let docRef = firestore.collection("memories").document(memoryID)
         let snapshot = try await docRef.getDocument()
         let reactions = MemoryPost.parseReactions(snapshot.data()?["reactions"])
-        var updated = reactions
-        var users = updated[emoji] ?? []
-        if let index = users.firstIndex(of: userID) {
-            users.remove(at: index)
-        } else {
-            users.append(userID)
-        }
-        updated[emoji] = users
+        let updated = Self.toggledSingleReaction(reactions, emoji: emoji, userID: userID)
         try await docRef.setData(["reactions": updated], merge: true)
         #else
         throw FirebaseRepositoryError.sdkMissing
@@ -301,14 +311,7 @@ struct FirebaseSocialRepository: SocialRepository {
         let docRef = firestore.collection("recipes").document(recipeID)
         let snapshot = try await docRef.getDocument()
         let reactions = MemoryPost.parseReactions(snapshot.data()?["reactions"])
-        var updated = reactions
-        var users = updated[emoji] ?? []
-        if let index = users.firstIndex(of: userID) {
-            users.remove(at: index)
-        } else {
-            users.append(userID)
-        }
-        updated[emoji] = users
+        let updated = Self.toggledSingleReaction(reactions, emoji: emoji, userID: userID)
         try await docRef.setData(["reactions": updated], merge: true)
         #else
         throw FirebaseRepositoryError.sdkMissing
@@ -350,14 +353,7 @@ struct FirebaseSocialRepository: SocialRepository {
         let docRef = firestore.collection("traditions").document(traditionID)
         let snapshot = try await docRef.getDocument()
         let reactions = MemoryPost.parseReactions(snapshot.data()?["reactions"])
-        var updated = reactions
-        var users = updated[emoji] ?? []
-        if let index = users.firstIndex(of: userID) {
-            users.remove(at: index)
-        } else {
-            users.append(userID)
-        }
-        updated[emoji] = users
+        let updated = Self.toggledSingleReaction(reactions, emoji: emoji, userID: userID)
         try await docRef.setData(["reactions": updated], merge: true)
         #else
         throw FirebaseRepositoryError.sdkMissing
@@ -399,14 +395,7 @@ struct FirebaseSocialRepository: SocialRepository {
         let docRef = firestore.collection("memorylane").document(milestoneID)
         let snapshot = try await docRef.getDocument()
         let reactions = MemoryPost.parseReactions(snapshot.data()?["reactions"])
-        var updated = reactions
-        var users = updated[emoji] ?? []
-        if let index = users.firstIndex(of: userID) {
-            users.remove(at: index)
-        } else {
-            users.append(userID)
-        }
-        updated[emoji] = users
+        let updated = Self.toggledSingleReaction(reactions, emoji: emoji, userID: userID)
         try await docRef.setData(["reactions": updated], merge: true)
         #else
         throw FirebaseRepositoryError.sdkMissing
@@ -420,6 +409,38 @@ struct FirebaseSocialRepository: SocialRepository {
         var comments = MemoryPost.parseComments(snapshot.data()?["comments"])
         comments.append(comment)
         try await docRef.setData(["comments": comments.map { $0.firestoreData }], merge: true)
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
+    func submitBusiness(_ business: FamilyBusiness, treeId: String) async throws {
+        #if canImport(FirebaseFirestore)
+        let id = business.id.isEmpty ? UUID().uuidString : business.id
+        let finalBusiness = FamilyBusiness(
+            id: id,
+            name: business.name,
+            ownerName: business.ownerName,
+            contactNumber: business.contactNumber,
+            type: business.type,
+            address: business.address,
+            locationLink: business.locationLink,
+            latitude: business.latitude,
+            longitude: business.longitude,
+            addedBy: business.addedBy,
+            treeId: treeId.isEmpty ? "primary" : treeId,
+            timestamp: business.timestamp == 0 ? Self.currentMillis() : business.timestamp
+        )
+        try await firestore.collection("businesses").document(id).setData(finalBusiness.firestoreData)
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
+    func deleteBusiness(businessID: String) async throws {
+        #if canImport(FirebaseFirestore)
+        guard !businessID.isEmpty else { return }
+        try await firestore.collection("businesses").document(businessID).delete()
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif
@@ -662,6 +683,22 @@ struct FirebaseSocialRepository: SocialRepository {
         Int64(Date().timeIntervalSince1970 * 1000)
     }
 
+    private static func toggledSingleReaction(_ reactions: [String: [String]], emoji: String, userID: String) -> [String: [String]] {
+        let alreadySelected = reactions[emoji]?.contains(userID) == true
+        var updated = reactions.reduce(into: [String: [String]]()) { result, entry in
+            let users = entry.value.filter { $0 != userID }
+            if !users.isEmpty {
+                result[entry.key] = users
+            }
+        }
+        if !alreadySelected {
+            var users = updated[emoji] ?? []
+            users.append(userID)
+            updated[emoji] = users
+        }
+        return updated
+    }
+
     private static func initialChessBoard() -> [String] {
         [
             "BR", "BN", "BB", "BQ", "BK", "BB", "BN", "BR",
@@ -677,6 +714,8 @@ struct FirebaseSocialRepository: SocialRepository {
 
     private func normalizedDeletionCollection(_ collectionName: String) -> String {
         switch collectionName.lowercased() {
+        case "gallery":
+            return "memories"
         case "memorylane":
             return "memorylane"
         case "memories":
@@ -706,7 +745,7 @@ private extension MemoryPost {
             imageURL: data["imageUrl"] as? String ?? "",
             caption: data["caption"] as? String ?? "",
             timestamp: Self.dateValue(from: data["timestamp"]),
-            status: data["status"] as? String ?? "PENDING",
+            status: (data["status"] as? String ?? "PENDING").approvalNormalizedStatus,
             reactions: Self.parseReactions(data["reactions"]),
             comments: Self.parseComments(data["comments"])
         )
@@ -720,7 +759,7 @@ private extension MemoryPost {
             "imageUrl": imageURL,
             "caption": caption,
             "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000),
-            "status": status,
+            "status": status.approvalNormalizedStatus,
             "reactions": reactions,
             "comments": comments.map { $0.firestoreData }
         ]
@@ -756,7 +795,7 @@ private extension DiscussionThread {
                 ]
             },
             "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000),
-            "status": status,
+            "status": status.approvalNormalizedStatus,
             "comments": comments.map { $0.firestoreData }
         ]
     }
@@ -783,7 +822,7 @@ private extension DiscussionThread {
             content: data["content"] as? String ?? "",
             pollOptions: options,
             timestamp: Self.dateValue(from: data["timestamp"]),
-            status: data["status"] as? String ?? "PENDING",
+            status: (data["status"] as? String ?? "PENDING").approvalNormalizedStatus,
             comments: MemoryPost.parseComments(data["comments"])
         )
     }
@@ -807,7 +846,7 @@ private extension Recipe {
             "imageUrl": imageURL,
             "reactions": reactions,
             "comments": comments.map { $0.firestoreData },
-            "status": status,
+            "status": status.approvalNormalizedStatus,
             "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000)
         ]
     }
@@ -846,7 +885,7 @@ private extension Recipe {
             imageURL: data["imageUrl"] as? String ?? "",
             reactions: reactions,
             comments: comments,
-            status: data["status"] as? String ?? "APPROVED",
+            status: (data["status"] as? String ?? "APPROVED").approvalNormalizedStatus,
             timestamp: Self.dateValue(from: data["timestamp"])
         )
     }
@@ -880,7 +919,7 @@ private extension Tradition {
             "imageUrl": imageURL,
             "reactions": reactions,
             "comments": comments.map { $0.firestoreData },
-            "status": status,
+            "status": status.approvalNormalizedStatus,
             "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000)
         ]
     }
@@ -900,7 +939,7 @@ private extension Tradition {
             imageURL: data["imageUrl"] as? String ?? "",
             reactions: MemoryPost.parseReactions(data["reactions"]),
             comments: MemoryPost.parseComments(data["comments"]),
-            status: data["status"] as? String ?? "APPROVED",
+            status: (data["status"] as? String ?? "APPROVED").approvalNormalizedStatus,
             timestamp: Self.dateValue(from: data["timestamp"])
         )
     }
@@ -927,7 +966,7 @@ private extension Milestone {
             "familyContextId": familyContextId,
             "reactions": reactions,
             "comments": comments.map { $0.firestoreData },
-            "status": status
+            "status": status.approvalNormalizedStatus
         ]
     }
 }
@@ -952,7 +991,7 @@ private extension Milestone {
             familyContextId: data["familyContextId"] as? String ?? "",
             reactions: MemoryPost.parseReactions(data["reactions"]),
             comments: MemoryPost.parseComments(data["comments"]),
-            status: data["status"] as? String ?? "APPROVED"
+            status: (data["status"] as? String ?? "APPROVED").approvalNormalizedStatus
         )
     }
 }
@@ -1004,17 +1043,22 @@ private extension DeletionRequest {
 
     init?(document: QueryDocumentSnapshot) {
         let data = document.data()
-        guard let title = data["title"] as? String else { return nil }
+        let title = data["title"] as? String
+            ?? data["itemTitle"] as? String
+            ?? data["contentTitle"] as? String
+            ?? data["caption"] as? String
+            ?? data["postTitle"] as? String
+            ?? "Gallery item"
         self.init(
             id: document.documentID,
-            collectionName: data["collectionName"] as? String ?? data["collection"] as? String ?? data["targetCollection"] as? String ?? "",
-            docId: data["docId"] as? String ?? data["itemId"] as? String ?? data["targetId"] as? String ?? data["postId"] as? String ?? "",
+            collectionName: data["collectionName"] as? String ?? data["collection"] as? String ?? data["targetCollection"] as? String ?? data["category"] as? String ?? "",
+            docId: data["docId"] as? String ?? data["itemId"] as? String ?? data["targetId"] as? String ?? data["postId"] as? String ?? data["memoryId"] as? String ?? "",
             title: title,
             reason: data["reason"] as? String ?? "",
             requestedBy: data["requestedBy"] as? String ?? "",
-            requestedByName: data["requestedByName"] as? String ?? "",
+            requestedByName: data["requestedByName"] as? String ?? data["requesterName"] as? String ?? data["userName"] as? String ?? "",
             timestamp: Self.dateValue(from: data["timestamp"]),
-            status: data["status"] as? String ?? "PENDING"
+            status: (data["status"] as? String ?? "PENDING").approvalNormalizedStatus
         )
     }
 
@@ -1033,8 +1077,65 @@ private extension DeletionRequest {
             "requestedBy": requestedBy,
             "requestedByName": requestedByName,
             "timestamp": Int64(timestamp.timeIntervalSince1970 * 1000),
-            "status": status
+            "status": status.approvalNormalizedStatus
         ]
+    }
+}
+
+private extension FamilyBusiness {
+    init?(document: QueryDocumentSnapshot) {
+        let data = document.data()
+        self.init(
+            id: data["id"] as? String ?? document.documentID,
+            name: data["name"] as? String ?? "",
+            ownerName: data["ownerName"] as? String ?? "",
+            contactNumber: data["contactNumber"] as? String ?? "",
+            type: data["type"] as? String ?? "",
+            address: data["address"] as? String ?? "",
+            locationLink: data["locationLink"] as? String ?? "",
+            latitude: data["latitude"] as? Double ?? (data["latitude"] as? NSNumber)?.doubleValue,
+            longitude: data["longitude"] as? Double ?? (data["longitude"] as? NSNumber)?.doubleValue,
+            addedBy: data["addedBy"] as? String ?? "",
+            treeId: data["treeId"] as? String ?? "primary",
+            timestamp: Self.millisValue(from: data["timestamp"])
+        )
+    }
+
+    var firestoreData: [String: Any] {
+        var data: [String: Any] = [
+            "id": id,
+            "name": name,
+            "ownerName": ownerName,
+            "contactNumber": contactNumber,
+            "type": type,
+            "address": address,
+            "locationLink": locationLink,
+            "addedBy": addedBy,
+            "treeId": treeId.isEmpty ? "primary" : treeId,
+            "timestamp": timestamp
+        ]
+        data["latitude"] = latitude
+        data["longitude"] = longitude
+        return data
+    }
+
+    static func millisValue(from raw: Any?) -> Int64 {
+        if let value = raw as? Int64 {
+            return value
+        }
+        if let value = raw as? Int {
+            return Int64(value)
+        }
+        if let value = raw as? Double {
+            return Int64(value)
+        }
+        if let value = raw as? NSNumber {
+            return value.int64Value
+        }
+        if let timestamp = raw as? Timestamp {
+            return Int64(timestamp.dateValue().timeIntervalSince1970 * 1000)
+        }
+        return Int64(Date().timeIntervalSince1970 * 1000)
     }
 }
 

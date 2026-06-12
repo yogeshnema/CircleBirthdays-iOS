@@ -268,4 +268,55 @@ extension Member {
             badges: badges
         )
     }
+
+    func withApprovalStatus(
+        _ status: String,
+        requestedBy: String? = nil,
+        requestedByName: String? = nil,
+        requestedRelationship: String? = nil
+    ) -> Member {
+        Member(
+            id: id,
+            familyId: familyId,
+            name: name,
+            gender: gender,
+            dateOfBirth: dateOfBirth,
+            phoneNumber: phoneNumber,
+            email: email,
+            location: location,
+            spouseName: spouseName,
+            fatherName: fatherName,
+            motherName: motherName,
+            marriageDate: marriageDate,
+            bereavementDate: bereavementDate,
+            photoURL: photoURL,
+            immediateFamily: immediateFamily,
+            address: address,
+            latitude: latitude,
+            longitude: longitude,
+            flatNumber: flatNumber,
+            floor: floor,
+            landmark: landmark,
+            password: password,
+            isAdmin: isAdmin,
+            isEditor: isEditor,
+            isPrimaryTree: isPrimaryTree,
+            secondaryTreeEnabled: secondaryTreeEnabled,
+            treeId: treeId,
+            status: status.approvalNormalizedStatus,
+            lastLoggedIn: lastLoggedIn,
+            relationship: relationship,
+            fcmToken: fcmToken,
+            facebookURL: facebookURL,
+            instagramURL: instagramURL,
+            youtubeURL: youtubeURL,
+            manualRelationships: manualRelationships,
+            requestedBy: requestedBy,
+            requestedByName: requestedByName,
+            requestedRelationship: requestedRelationship,
+            points: points,
+            level: level,
+            badges: badges
+        )
+    }
 }

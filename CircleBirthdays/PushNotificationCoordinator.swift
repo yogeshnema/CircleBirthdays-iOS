@@ -1,5 +1,6 @@
 import Foundation
 import UserNotifications
+import os
 
 #if canImport(UIKit)
 import UIKit
@@ -17,6 +18,11 @@ extension Notification.Name {
     static let circleBirthdaysPushTokenDidChange = Notification.Name("CircleBirthdaysPushTokenDidChange")
 }
 
+private let pushLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "CircleBirthdays",
+    category: "PushNotifications"
+)
+
 final class PushNotificationCoordinator: NSObject {
     static let shared = PushNotificationCoordinator()
 
@@ -26,10 +32,20 @@ final class PushNotificationCoordinator: NSObject {
     func configure(application: UIApplication) {
         #if canImport(FirebaseMessaging)
         Messaging.messaging().delegate = self
+        pushLogger.info("FirebaseMessaging delegate configured.")
+        #else
+        pushLogger.error("FirebaseMessaging is not available in this build.")
         #endif
 
-        Task {
-            _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+        Task { @MainActor in
+            do {
+                let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .badge, .sound])
+                pushLogger.info("Notification authorization result: \(granted, privacy: .public)")
+            } catch {
+                pushLogger.error("Notification authorization request failed: \(error.localizedDescription, privacy: .public)")
+            }
+
+            pushLogger.info("Registering app for remote notifications.")
             application.registerForRemoteNotifications()
             await refreshFCMToken()
         }
@@ -38,9 +54,11 @@ final class PushNotificationCoordinator: NSObject {
     func didRegisterForRemoteNotifications(with deviceToken: Data) {
         let token = deviceToken.hexString
         self.deviceToken = token
+        pushLogger.info("APNs device token received: \(token, privacy: .private)")
 
         #if canImport(FirebaseMessaging)
         Messaging.messaging().apnsToken = deviceToken
+        pushLogger.info("APNs token assigned to FirebaseMessaging.")
         Task {
             await refreshFCMToken()
         }
@@ -48,6 +66,7 @@ final class PushNotificationCoordinator: NSObject {
     }
 
     func didFailToRegisterForRemoteNotifications(with error: Error) {
+        pushLogger.error("Push registration failed: \(error.localizedDescription, privacy: .public)")
         print("Push registration failed: \(error.localizedDescription)")
     }
 
@@ -60,15 +79,25 @@ final class PushNotificationCoordinator: NSObject {
     }
 
     func syncPushToken(for member: Member, using repository: MemberRepository) async {
-        guard let token = fcmToken ?? deviceToken, member.fcmToken != token else { return }
+        guard let token = fcmToken ?? deviceToken else {
+            pushLogger.error("No APNs or FCM token available to sync for member \(member.id, privacy: .private).")
+            return
+        }
+
+        guard member.fcmToken != token else {
+            pushLogger.info("Push token already synced for member \(member.id, privacy: .private).")
+            return
+        }
 
         do {
             try await repository.updatePushToken(
                 userID: member.id,
                 token: token,
-                toPending: member.status == "PENDING"
+                toPending: member.status.isPendingStatus
             )
+            pushLogger.info("Push token synced for member \(member.id, privacy: .private).")
         } catch {
+            pushLogger.error("Unable to sync push token: \(error.localizedDescription, privacy: .public)")
             print("Unable to sync push token: \(error.localizedDescription)")
         }
     }
@@ -129,16 +158,22 @@ final class PushNotificationCoordinator: NSObject {
     func updateFCMToken(_ token: String?) {
         guard let token, !token.isEmpty, fcmToken != token else { return }
         fcmToken = token
+        pushLogger.info("FCM token updated: \(token, privacy: .private)")
         NotificationCenter.default.post(name: .circleBirthdaysPushTokenDidChange, object: token)
     }
 
     private func refreshFCMToken() async {
         #if canImport(FirebaseMessaging)
-        guard FirebaseBootstrap.isConfigured else { return }
+        guard FirebaseBootstrap.isConfigured else {
+            pushLogger.error("Skipping FCM token fetch because Firebase is not configured.")
+            return
+        }
         do {
+            pushLogger.info("Fetching FCM token.")
             let token = try await Messaging.messaging().token()
             updateFCMToken(token)
         } catch {
+            pushLogger.error("Unable to fetch FCM token: \(error.localizedDescription, privacy: .public)")
             print("Unable to fetch FCM token: \(error.localizedDescription)")
         }
         #endif

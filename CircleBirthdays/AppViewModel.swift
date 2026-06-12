@@ -90,10 +90,12 @@ final class AppViewModel {
     var recipes: [Recipe] = []
     var traditions: [Tradition] = []
     var milestones: [Milestone] = []
+    var businesses: [FamilyBusiness] = []
     var channels: [ChatChannel] = []
     var messages: [ChatMessage] = []
     var relationshipOverrides: [RelationshipOverride] = []
     var deletionRequests: [DeletionRequest] = []
+    var signupRequests: [SignupRequest] = []
     var activeGameSessions: [GameSession] = []
     var currentGameSession: GameSession?
     var notifications: [AppNotification] = []
@@ -106,11 +108,14 @@ final class AppViewModel {
     var searchText = ""
     var repositoryStatus = FirebaseBootstrap.statusText
     var lastInboxRefreshAt: Date?
+    var lastFullSyncAt: Date?
+    var isSyncingAll = false
     var language: AppLanguage = UserDefaults.standard.string(forKey: SessionStore.languageKey).flatMap(AppLanguage.init(rawValue:)) ?? .english
     var currentTreeId: String = UserDefaults.standard.string(forKey: SessionStore.treeIDKey) ?? "primary"
     private var pushTokenObserver: NSObjectProtocol?
     private var inboxRefreshTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
+    private let fullSyncIntervalNanoseconds: UInt64 = 30 * 60 * 1_000_000_000
 
     init(memberRepository: MemberRepository, socialRepository: SocialRepository) {
         self.memberRepository = memberRepository
@@ -152,7 +157,7 @@ final class AppViewModel {
     }
 
     var activeMembers: [Member] {
-        members.filter { !$0.isDeceased && $0.status == "APPROVED" }
+        members.filter { !$0.isDeceased && $0.status.isApprovedStatus }
     }
 
     var dashboardActiveMembers: [Member] {
@@ -168,7 +173,7 @@ final class AppViewModel {
     }
 
     var approvedMembers: [Member] {
-        members.filter { $0.status == "APPROVED" }
+        members.filter { $0.status.isApprovedStatus }
     }
 
     var dashboardApprovedMembers: [Member] {
@@ -207,11 +212,26 @@ final class AppViewModel {
     }
 
     var approvalPendingCount: Int {
-        pendingCount + pendingOverrideCount + pendingDeletionCount
+        pendingCount + pendingSignupRequestCount + pendingContentApprovalCount + pendingOverrideCount + pendingDeletionCount
+    }
+
+    var pendingSignupRequestCount: Int {
+        signupRequests.filter { $0.normalizedStatus.isPendingStatus }.count
+    }
+
+    var pendingContentApprovalCount: Int {
+        pendingMemories.count
+            + pendingDiscussions.count
+            + pendingRecipes.count
+            + pendingTraditions.count
+            + pendingMilestones.count
     }
 
     var dashboardPendingMembers: [Member] {
-        pendingMembers.filter { member in
+        if hasAdminPrivileges {
+            return pendingMembers
+        }
+        return pendingMembers.filter { member in
             currentTreeId == "primary"
                 ? (member.treeId.isEmpty || member.treeId == "primary" || member.isPrimaryTree)
                 : member.treeId == currentTreeId || member.id == currentTreeId
@@ -228,12 +248,20 @@ final class AppViewModel {
 
     var approvedMemories: [MemoryPost] {
         let isAdmin = hasAdminPrivileges
-        return memories.filter { isAdmin || $0.status == "APPROVED" }
+        return memories.filter { isAdmin || $0.status.isApprovedStatus }
+    }
+
+    var pendingMemories: [MemoryPost] {
+        memories.filter { $0.status.isPendingStatus }.sorted { $0.timestamp > $1.timestamp }
     }
 
     var visibleDiscussions: [DiscussionThread] {
         let isAdmin = hasAdminPrivileges
-        return discussions.filter { isAdmin || $0.status == "APPROVED" }
+        return discussions.filter { isAdmin || $0.status.isApprovedStatus }
+    }
+
+    var pendingDiscussions: [DiscussionThread] {
+        discussions.filter { $0.status.isPendingStatus }.sorted { $0.timestamp > $1.timestamp }
     }
 
     var totalUnreadCount: Int {
@@ -267,8 +295,12 @@ final class AppViewModel {
     var visibleRecipes: [Recipe] {
         let isAdmin = hasAdminPrivileges
         return recipes
-            .filter { isAdmin || $0.status == "APPROVED" }
+            .filter { isAdmin || $0.status.isApprovedStatus }
             .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var pendingRecipes: [Recipe] {
+        recipes.filter { $0.status.isPendingStatus }.sorted { $0.timestamp > $1.timestamp }
     }
 
     var hasAdminPrivileges: Bool {
@@ -282,13 +314,17 @@ final class AppViewModel {
     var visibleTraditions: [Tradition] {
         let isAdmin = hasAdminPrivileges
         return traditions
-            .filter { isAdmin || $0.status == "APPROVED" }
+            .filter { isAdmin || $0.status.isApprovedStatus }
             .sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var pendingTraditions: [Tradition] {
+        traditions.filter { $0.status.isPendingStatus }.sorted { $0.timestamp > $1.timestamp }
     }
 
     var visibleMilestones: [Milestone] {
         let isAdmin = hasAdminPrivileges
-        return milestones.filter { isAdmin || $0.status == "APPROVED" }.sorted {
+        return milestones.filter { isAdmin || $0.status.isApprovedStatus }.sorted {
             let lhsYear = Int($0.year) ?? 0
             let rhsYear = Int($1.year) ?? 0
             if lhsYear == rhsYear {
@@ -296,6 +332,16 @@ final class AppViewModel {
             }
             return lhsYear < rhsYear
         }
+    }
+
+    var pendingMilestones: [Milestone] {
+        milestones.filter { $0.status.isPendingStatus }.sorted { $0.timestamp > $1.timestamp }
+    }
+
+    var visibleBusinesses: [FamilyBusiness] {
+        businesses
+            .filter { belongsToCurrentTree($0.treeId) }
+            .sorted { $0.timestamp > $1.timestamp }
     }
 
     var visibleGameSessions: [GameSession] {
@@ -434,6 +480,25 @@ final class AppViewModel {
         familyId.hasSuffix("0") ? String(familyId.dropLast()) : familyId + "0"
     }
 
+    private func normalizedTreeId(_ treeId: String?) -> String {
+        guard let treeId, !treeId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return "primary"
+        }
+        return treeId
+    }
+
+    private func belongsToCurrentTree(_ treeId: String?) -> Bool {
+        normalizedTreeId(treeId) == normalizedTreeId(currentTreeId)
+    }
+
+    private func upsertBusiness(_ business: FamilyBusiness) {
+        if let index = businesses.firstIndex(where: { $0.id == business.id }) {
+            businesses[index] = business
+        } else {
+            businesses.insert(business, at: 0)
+        }
+    }
+
     private func parseFlexibleDate(_ string: String, calendar: Calendar) -> Date? {
         if let date = Member.isoDateFormatter.date(from: string) {
             return date
@@ -458,8 +523,11 @@ final class AppViewModel {
             pendingMembers = try await pendingTask
             repositoryStatus = FirebaseBootstrap.statusText
             try await loadSocialState()
+            try await loadSignupRequests()
             try await loadRelationshipOverrides()
             try await loadDeletionRequests()
+            lastFullSyncAt = .now
+            preloadRemoteMedia()
             restoreSessionIfPossible()
         } catch {
             if FirebaseBootstrap.isConfigured {
@@ -477,8 +545,11 @@ final class AppViewModel {
                     milestones = MockSocialData.milestones()
                     channels = []
                     messages = []
+                    signupRequests = (try? await fallback.fetchSignupRequests()) ?? []
                     relationshipOverrides = try await memberRepository.fetchRelationshipOverrides()
                     deletionRequests = try await socialRepository.fetchDeletionRequests()
+                    lastFullSyncAt = .now
+                    preloadRemoteMedia()
                     restoreSessionIfPossible()
                 } catch {
                     errorMessage = error.localizedDescription
@@ -490,11 +561,26 @@ final class AppViewModel {
     }
 
     func refreshAllData() async {
+        guard !isSyncingAll else { return }
+        isSyncingAll = true
+        defer { isSyncingAll = false }
+
         await load()
 
         if let currentUserID = currentUser?.id,
            let latestUser = members.first(where: { $0.id == currentUserID }) {
             currentUser = latestUser
+        }
+        lastFullSyncAt = .now
+
+        let mediaURLStrings = remoteMediaURLStrings
+        let fileURLStrings = remoteFileURLStrings
+        Task {
+            await Self.refreshRemoteMediaCache(
+                mediaURLStrings: mediaURLStrings,
+                fileURLStrings: fileURLStrings,
+                forceRefresh: true
+            )
         }
     }
 
@@ -503,11 +589,14 @@ final class AppViewModel {
         do {
             async let membersTask = memberRepository.fetchMembers()
             async let pendingTask = memberRepository.fetchPendingMembers()
+            async let signupRequestsTask = memberRepository.fetchSignupRequests()
             let fetchedMembers = try await membersTask
             let fetchedPending = try await pendingTask
+            let fetchedSignupRequests = try await signupRequestsTask
 
             members = fetchedMembers
             pendingMembers = fetchedPending
+            signupRequests = fetchedSignupRequests
             repositoryStatus = FirebaseBootstrap.statusText
 
             try await loadSocialState(showErrors: false)
@@ -518,6 +607,8 @@ final class AppViewModel {
                 currentUser = latestUser
             }
             await refreshNotifications(showErrors: false)
+            preloadRemoteMedia()
+            lastFullSyncAt = .now
         } catch {
             // Automatic refresh should stay quiet; the foreground load and explicit actions still surface errors.
         }
@@ -567,6 +658,47 @@ final class AppViewModel {
             try? await memberRepository.updateLastLoggedIn(userID: user.id, timestamp: loginTimestamp)
             await refreshInbox()
             await refreshNotifications()
+        }
+    }
+
+    func submitSignupRequest(name: String, parentName: String, mobileNumber: String, email: String) async -> Bool {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedParent = parentName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedMobile = mobileNumber.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard !trimmedName.isEmpty, !trimmedParent.isEmpty, !Self.normalizePhoneNumber(trimmedMobile).isEmpty else {
+            loginError = "Enter name, parent name, and mobile number."
+            return false
+        }
+
+        let normalizedMobile = Self.normalizePhoneNumber(trimmedMobile)
+        if members.contains(where: { Self.normalizePhoneNumber($0.phoneNumber) == normalizedMobile }) {
+            loginError = "This mobile number already exists. Please login with this number."
+            return false
+        }
+
+        let suggestion = suggestedMember(forName: trimmedName, parentName: trimmedParent)
+        let request = SignupRequest(
+            id: "signup-\(UUID().uuidString)",
+            name: trimmedName,
+            parentName: trimmedParent,
+            mobileNumber: trimmedMobile,
+            email: trimmedEmail,
+            status: "PENDING",
+            requestedAt: Int64(Date().timeIntervalSince1970 * 1000),
+            suggestedMemberID: suggestion?.id,
+            suggestedMemberName: suggestion?.name
+        )
+
+        do {
+            try await memberRepository.submitSignupRequest(request)
+            signupRequests.insert(request, at: 0)
+            loginError = nil
+            return true
+        } catch {
+            loginError = error.localizedDescription
+            return false
         }
     }
 
@@ -659,6 +791,61 @@ final class AppViewModel {
 
     func showBusinessDirectory() {
         currentScreen = .businessDirectory
+    }
+
+    func addBusiness(_ business: FamilyBusiness) async {
+        guard let currentUser else { return }
+        let timestamp = business.timestamp == 0 ? Int64(Date().timeIntervalSince1970 * 1000) : business.timestamp
+        let finalBusiness = FamilyBusiness(
+            id: business.id,
+            name: business.name,
+            ownerName: business.ownerName,
+            contactNumber: business.contactNumber,
+            type: business.type,
+            address: business.address,
+            locationLink: business.locationLink,
+            latitude: business.latitude,
+            longitude: business.longitude,
+            addedBy: currentUser.id,
+            treeId: currentTreeId,
+            timestamp: timestamp
+        )
+
+        do {
+            try await socialRepository.submitBusiness(finalBusiness, treeId: currentTreeId)
+            let savedBusiness: FamilyBusiness?
+            if finalBusiness.id.isEmpty {
+                let fetchedBusinesses = try await socialRepository.fetchBusinesses()
+                businesses = fetchedBusinesses
+                savedBusiness = fetchedBusinesses.first { $0.timestamp == timestamp && $0.addedBy == currentUser.id }
+            } else {
+                savedBusiness = finalBusiness
+            }
+            if let savedBusiness {
+                upsertBusiness(savedBusiness)
+            } else {
+                businesses = try await socialRepository.fetchBusinesses()
+            }
+            await PushNotificationCoordinator.shared.queueNotification(
+                title: "New Business Added",
+                body: "\(finalBusiness.ownerName) added their business: \(finalBusiness.name)",
+                recipientIDs: activeMembers.map(\.id).filter { $0 != currentUser.id },
+                category: "business",
+                referenceID: finalBusiness.id
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteBusiness(_ business: FamilyBusiness) async {
+        guard hasAdminPrivileges || business.addedBy == currentUser?.id else { return }
+        do {
+            try await socialRepository.deleteBusiness(businessID: business.id)
+            businesses.removeAll { $0.id == business.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func showEmergency() {
@@ -846,7 +1033,8 @@ final class AppViewModel {
             } else {
                 recipes.append(recipe)
             }
-            if recipe.status == "APPROVED" {
+            preloadRemoteMedia(for: [recipe.imageURL])
+            if recipe.status.isApprovedStatus {
                 let recipients = activeMembers.map(\.id).filter { $0 != recipe.authorId }
                 await PushNotificationCoordinator.shared.queueNotification(
                     title: "New recipe shared",
@@ -889,8 +1077,9 @@ final class AppViewModel {
             } else {
                 memories.append(memory)
             }
+            preloadRemoteMedia(for: [memory.imageURL])
 
-            if memory.status == "APPROVED" {
+            if memory.status.isApprovedStatus {
                 let recipients = activeMembers.map(\.id).filter { $0 != memory.userId }
                 await PushNotificationCoordinator.shared.queueNotification(
                     title: "New photo shared",
@@ -945,14 +1134,7 @@ final class AppViewModel {
             try await socialRepository.toggleMemoryReaction(memoryID: memory.id, emoji: emoji, userID: currentUser.id)
             if let index = memories.firstIndex(where: { $0.id == memory.id }) {
                 var updated = memories[index]
-                var reactions = updated.reactions
-                var users = reactions[emoji] ?? []
-                if let userIndex = users.firstIndex(of: currentUser.id) {
-                    users.remove(at: userIndex)
-                } else {
-                    users.append(currentUser.id)
-                }
-                reactions[emoji] = users
+                let reactions = Self.toggledSingleReaction(updated.reactions, emoji: emoji, userID: currentUser.id)
                 updated = MemoryPost(
                     id: updated.id,
                     userId: updated.userId,
@@ -1019,14 +1201,7 @@ final class AppViewModel {
             try await socialRepository.toggleRecipeReaction(recipeID: recipe.id, emoji: emoji, userID: currentUser.id)
             if let index = recipes.firstIndex(where: { $0.id == recipe.id }) {
                 var updated = recipes[index]
-                var reactions = updated.reactions
-                var users = reactions[emoji] ?? []
-                if let userIndex = users.firstIndex(of: currentUser.id) {
-                    users.remove(at: userIndex)
-                } else {
-                    users.append(currentUser.id)
-                }
-                reactions[emoji] = users
+                let reactions = Self.toggledSingleReaction(updated.reactions, emoji: emoji, userID: currentUser.id)
                 updated = Recipe(
                     id: updated.id,
                     title: updated.title,
@@ -1095,7 +1270,8 @@ final class AppViewModel {
             } else {
                 traditions.append(tradition)
             }
-            if tradition.status == "APPROVED" {
+            preloadRemoteMedia(for: [tradition.imageURL])
+            if tradition.status.isApprovedStatus {
                 let recipients = activeMembers.map(\.id).filter { $0 != tradition.authorId }
                 await PushNotificationCoordinator.shared.queueNotification(
                     title: "New tradition shared",
@@ -1116,14 +1292,7 @@ final class AppViewModel {
             try await socialRepository.toggleTraditionReaction(traditionID: tradition.id, emoji: emoji, userID: currentUser.id)
             if let index = traditions.firstIndex(where: { $0.id == tradition.id }) {
                 var updated = traditions[index]
-                var reactions = updated.reactions
-                var users = reactions[emoji] ?? []
-                if let userIndex = users.firstIndex(of: currentUser.id) {
-                    users.remove(at: userIndex)
-                } else {
-                    users.append(currentUser.id)
-                }
-                reactions[emoji] = users
+                let reactions = Self.toggledSingleReaction(updated.reactions, emoji: emoji, userID: currentUser.id)
                 updated = Tradition(
                     id: updated.id,
                     title: updated.title,
@@ -1194,7 +1363,7 @@ final class AppViewModel {
             } else {
                 discussions.append(discussion)
             }
-            if discussion.status == "APPROVED" {
+            if discussion.status.isApprovedStatus {
                 let recipients = activeMembers.map(\.id).filter { $0 != discussion.userId }
                 await PushNotificationCoordinator.shared.queueNotification(
                     title: "New discussion",
@@ -1217,7 +1386,9 @@ final class AppViewModel {
             } else {
                 milestones.append(milestone)
             }
-            if milestone.status == "APPROVED" {
+            preloadRemoteMedia(for: [milestone.imageURL])
+            preloadRemoteFiles(for: [milestone.audioURL])
+            if milestone.status.isApprovedStatus {
                 let recipients = activeMembers.map(\.id).filter { $0 != milestone.authorId }
                 await PushNotificationCoordinator.shared.queueNotification(
                     title: "New milestone shared",
@@ -1274,6 +1445,16 @@ final class AppViewModel {
                 comments: discussion.comments
             )
         )
+    }
+
+    func rejectDiscussion(_ discussion: DiscussionThread) async {
+        guard hasAdminPrivileges else { return }
+        do {
+            try await socialRepository.deleteDiscussion(discussionID: discussion.id)
+            discussions.removeAll { $0.id == discussion.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func approveRecipe(_ recipe: Recipe) async {
@@ -1344,14 +1525,7 @@ final class AppViewModel {
             try await socialRepository.toggleMilestoneReaction(milestoneID: milestone.id, emoji: emoji, userID: currentUser.id)
             if let index = milestones.firstIndex(where: { $0.id == milestone.id }) {
                 var updated = milestones[index]
-                var reactions = updated.reactions
-                var users = reactions[emoji] ?? []
-                if let userIndex = users.firstIndex(of: currentUser.id) {
-                    users.remove(at: userIndex)
-                } else {
-                    users.append(currentUser.id)
-                }
-                reactions[emoji] = users
+                let reactions = Self.toggledSingleReaction(updated.reactions, emoji: emoji, userID: currentUser.id)
                 updated = Milestone(
                     id: updated.id,
                     title: updated.title,
@@ -1439,10 +1613,14 @@ final class AppViewModel {
         }
     }
 
-    func saveMemberEdits(_ member: Member) async {
-        guard let currentUser else { return }
+    func saveMemberEdits(_ member: Member) async -> Bool {
+        guard let currentUser else { return false }
 
-        guard canEdit(member) else { return }
+        guard canEdit(member) else { return false }
+        if let validationError = validateMemberEdit(member) {
+            errorMessage = validationError
+            return false
+        }
 
         let savesDirectly = savesMemberEditsDirectly(member)
         let existingMember = (members + pendingMembers).first { $0.id == member.id }
@@ -1562,9 +1740,85 @@ final class AppViewModel {
             if savesDirectly && currentUser.id == finalMember.id {
                 self.currentUser = finalWithRequester
             }
+            preloadRemoteMedia(for: [finalWithRequester.photoURL])
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func approvePendingMember(_ member: Member) async {
+        guard hasAdminPrivileges else { return }
+        let approvedMember = member.withApprovalStatus("APPROVED")
+
+        do {
+            try await memberRepository.saveMember(approvedMember, toPending: false)
+            try await memberRepository.deletePendingMember(userID: member.id)
+
+            if let index = members.firstIndex(where: { $0.id == approvedMember.id }) {
+                members[index] = approvedMember
+            } else {
+                members.append(approvedMember)
+            }
+            pendingMembers.removeAll { $0.id == member.id }
+            preloadRemoteMedia(for: [approvedMember.photoURL])
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    func suggestedMember(for request: SignupRequest) -> Member? {
+        if let suggestedMemberID = request.suggestedMemberID,
+           let member = (members + pendingMembers).first(where: { $0.id == suggestedMemberID }) {
+            return member
+        }
+        return suggestedMember(forName: request.name, parentName: request.parentName)
+    }
+
+    func approveSignupRequest(_ request: SignupRequest, assigningTo member: Member) async {
+        guard hasAdminPrivileges else { return }
+        let updatedMember = memberWithSignupContact(member, request: request)
+        let wasPendingMember = pendingMembers.contains { $0.id == member.id }
+
+        do {
+            try await memberRepository.saveMember(updatedMember, toPending: false)
+            if wasPendingMember {
+                try await memberRepository.deletePendingMember(userID: member.id)
+            }
+            try await memberRepository.deleteSignupRequest(requestID: request.id)
+            replaceLocalMember(updatedMember)
+            pendingMembers.removeAll { $0.id == updatedMember.id }
+            signupRequests.removeAll { $0.id == request.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func rejectSignupRequest(_ request: SignupRequest) async {
+        guard hasAdminPrivileges else { return }
+
+        do {
+            try await memberRepository.deleteSignupRequest(requestID: request.id)
+            signupRequests.removeAll { $0.id == request.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func rejectPendingMember(_ member: Member) async {
+        guard hasAdminPrivileges else { return }
+
+        do {
+            try await memberRepository.deletePendingMember(userID: member.id)
+            pendingMembers.removeAll { $0.id == member.id }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadSignupRequests() async throws {
+        signupRequests = try await memberRepository.fetchSignupRequests()
     }
 
     private func loadSocialState(showErrors: Bool = true) async throws {
@@ -1574,11 +1828,13 @@ final class AppViewModel {
             async let recipesTask = socialRepository.fetchRecipes()
             async let traditionsTask = socialRepository.fetchTraditions()
             async let milestonesTask = socialRepository.fetchMilestones()
+            async let businessesTask = socialRepository.fetchBusinesses()
             memories = try await memoriesTask
             discussions = try await discussionsTask
             recipes = try await recipesTask
             traditions = try await traditionsTask
             milestones = try await milestonesTask
+            businesses = try await businessesTask
             activeGameSessions = (try? await socialRepository.fetchActiveGameSessions()) ?? []
             if let currentUser {
                 notifications = (try? await socialRepository.fetchNotifications(userID: currentUser.id, isAdmin: isPrimaryAdminLogin)) ?? []
@@ -1610,6 +1866,7 @@ final class AppViewModel {
             recipes = MockSocialData.recipes()
             traditions = MockSocialData.traditions()
             milestones = MockSocialData.milestones()
+            businesses = (try? await MockSocialRepository().fetchBusinesses()) ?? []
             channels = []
             messages = []
             activeGameSessions = []
@@ -2091,7 +2348,7 @@ final class AppViewModel {
                 try await memberRepository.updatePushToken(
                     userID: updatedUser.id,
                     token: token,
-                    toPending: updatedUser.status == "PENDING"
+                    toPending: updatedUser.status.isPendingStatus
                 )
             } catch {
                 errorMessage = error.localizedDescription
@@ -2129,7 +2386,7 @@ final class AppViewModel {
 
         autoRefreshTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                try? await Task.sleep(nanoseconds: self?.fullSyncIntervalNanoseconds ?? 1_800_000_000_000)
                 if Task.isCancelled { break }
                 await self?.refreshAllDataSilently()
             }
@@ -2141,9 +2398,249 @@ final class AppViewModel {
         autoRefreshTask = nil
     }
 
+    private func suggestedMember(forName name: String, parentName: String) -> Member? {
+        let requestedNameTokens = Self.matchTokens(from: name)
+        let requestedParentTokens = Self.matchTokens(from: parentName)
+        guard !requestedNameTokens.isEmpty else { return nil }
+
+        return (members + pendingMembers)
+            .map { member -> (member: Member, score: Int) in
+                let memberNameTokens = Self.matchTokens(from: member.name)
+                let parentTokens = Self.matchTokens(from: [member.fatherName, member.motherName].compactMap { $0 }.joined(separator: " "))
+                let nameOverlap = requestedNameTokens.intersection(memberNameTokens).count
+                let parentOverlap = requestedParentTokens.intersection(parentTokens).count
+                let exactNameBonus = Self.normalizedWords(name) == Self.normalizedWords(member.name) ? 4 : 0
+                return (member, nameOverlap * 3 + parentOverlap * 4 + exactNameBonus)
+            }
+            .filter { $0.score >= 5 }
+            .sorted { lhs, rhs in
+                if lhs.score == rhs.score {
+                    return lhs.member.familyId < rhs.member.familyId
+                }
+                return lhs.score > rhs.score
+            }
+            .first?
+            .member
+    }
+
+    private func memberWithSignupContact(_ member: Member, request: SignupRequest) -> Member {
+        let email = request.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Member(
+            id: member.id,
+            familyId: member.familyId,
+            name: member.name,
+            gender: member.gender,
+            dateOfBirth: member.dateOfBirth,
+            phoneNumber: request.mobileNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+            email: email.isEmpty ? member.email : email,
+            location: member.location,
+            spouseName: member.spouseName,
+            fatherName: member.fatherName,
+            motherName: member.motherName,
+            marriageDate: member.marriageDate,
+            bereavementDate: member.bereavementDate,
+            photoURL: member.photoURL,
+            immediateFamily: member.immediateFamily,
+            address: member.address,
+            latitude: member.latitude,
+            longitude: member.longitude,
+            flatNumber: member.flatNumber,
+            floor: member.floor,
+            landmark: member.landmark,
+            password: member.password,
+            isAdmin: member.isAdmin,
+            isEditor: member.isEditor,
+            isPrimaryTree: member.isPrimaryTree,
+            secondaryTreeEnabled: member.secondaryTreeEnabled,
+            treeId: member.treeId,
+            status: "APPROVED",
+            lastLoggedIn: member.lastLoggedIn,
+            relationship: member.relationship,
+            fcmToken: member.fcmToken,
+            facebookURL: member.facebookURL,
+            instagramURL: member.instagramURL,
+            youtubeURL: member.youtubeURL,
+            manualRelationships: member.manualRelationships,
+            requestedBy: nil,
+            requestedByName: nil,
+            requestedRelationship: nil,
+            points: member.points,
+            level: member.level,
+            badges: member.badges
+        )
+    }
+
+    private func preloadRemoteMedia() {
+        preloadRemoteMedia(for: remoteMediaURLStrings)
+        preloadRemoteFiles(for: remoteFileURLStrings)
+    }
+
+    private func preloadRemoteMedia(for urlStrings: [String?]) {
+        let urls = urlStrings.compactMap(Self.remoteMediaURL)
+        guard !urls.isEmpty else { return }
+        Task {
+            await RemoteMediaCache.shared.preload(urls: urls)
+        }
+    }
+
+    private nonisolated static func refreshRemoteMediaCache(
+        mediaURLStrings: [String?],
+        fileURLStrings: [String?],
+        forceRefresh: Bool
+    ) async {
+        let urls = mediaURLStrings.compactMap(Self.remoteMediaURL)
+        if !urls.isEmpty {
+            if forceRefresh {
+                await RemoteMediaCache.shared.refresh(urls: urls)
+            } else {
+                await RemoteMediaCache.shared.preload(urls: urls)
+            }
+        }
+
+        let fileURLs = fileURLStrings.compactMap(Self.remoteMediaURL)
+        for url in fileURLs {
+            _ = try? await RemoteMediaCache.shared.cachedFileURL(for: url, forceRefresh: forceRefresh)
+        }
+    }
+
+    private var remoteMediaURLStrings: [String?] {
+        members.map(\.photoURL)
+            + pendingMembers.map(\.photoURL)
+            + memories.map { Optional($0.imageURL) }
+            + recipes.map { Optional($0.imageURL) }
+            + traditions.map { Optional($0.imageURL) }
+            + milestones.map { Optional($0.imageURL) }
+            + communityAchievements.map { Optional($0.imageURL) }
+            + (1...12).map { Optional("https://circlebirthdays.web.app/calendar/\($0).jpg") }
+    }
+
+    private var remoteFileURLStrings: [String?] {
+        milestones.map { Optional($0.audioURL) }
+    }
+
+    private func preloadRemoteFiles(for urlStrings: [String?]) {
+        let urls = urlStrings.compactMap(Self.remoteMediaURL)
+        guard !urls.isEmpty else { return }
+        Task {
+            for url in urls {
+                _ = try? await RemoteMediaCache.shared.cachedFileURL(for: url)
+            }
+        }
+    }
+
+    private static func remoteMediaURL(from value: String?) -> URL? {
+        guard let value,
+              !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !value.hasPrefix("data:image") else { return nil }
+        return URL(string: value)
+    }
+
     private static func sha256(_ value: String) -> String {
         let digest = SHA256.hash(data: Data(value.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func matchTokens(from value: String) -> Set<String> {
+        Set(normalizedWords(value).split(separator: " ").map(String.init).filter { $0.count > 1 })
+    }
+
+    private func validateMemberEdit(_ member: Member) -> String? {
+        let normalizedPhone = Self.normalizePhoneNumber(member.phoneNumber)
+        guard !normalizedPhone.isEmpty else {
+            return "Phone number is required because it is used for login."
+        }
+
+        let duplicatePhone = (members + pendingMembers).contains { existing in
+            existing.id != member.id && Self.normalizePhoneNumber(existing.phoneNumber) == normalizedPhone
+        }
+        if duplicatePhone {
+            return "Phone number must be unique. Another profile already uses this login number."
+        }
+
+        for field in editableNameFields(for: member) {
+            if let error = Self.nameValidationError(field.value, fieldName: field.name) {
+                return error
+            }
+        }
+
+        let today = Calendar.current.startOfDay(for: Date())
+        for field in editableDateFields(for: member) {
+            if let error = Self.dateValidationError(field.value, fieldName: field.name, today: today) {
+                return error
+            }
+        }
+
+        return nil
+    }
+
+    private func editableNameFields(for member: Member) -> [(name: String, value: String?)] {
+        [
+            ("Name", member.name),
+            ("Spouse", member.spouseName),
+            ("Father", member.fatherName),
+            ("Mother", member.motherName)
+        ]
+    }
+
+    private func editableDateFields(for member: Member) -> [(name: String, value: String?)] {
+        [
+            ("Date of Birth", member.dateOfBirth),
+            ("Marriage Date", member.marriageDate),
+            ("Bereavement Date", member.bereavementDate)
+        ]
+    }
+
+    private static func nameValidationError(_ value: String?, fieldName: String) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if fieldName == "Name", trimmed.isEmpty {
+            return "Name is required."
+        }
+        guard !trimmed.isEmpty else { return nil }
+
+        let allowedPunctuation = CharacterSet(charactersIn: "()")
+        let allowed = CharacterSet.letters.union(.whitespaces).union(allowedPunctuation)
+        if trimmed.unicodeScalars.contains(where: { !allowed.contains($0) }) {
+            return "\(fieldName) can contain only letters, spaces, and parentheses."
+        }
+        return nil
+    }
+
+    private static func dateValidationError(_ value: String?, fieldName: String, today: Date) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+
+        guard let date = Member.isoDateFormatter.date(from: trimmed) else {
+            return "\(fieldName) must use YYYY-MM-DD format."
+        }
+
+        if Calendar.current.startOfDay(for: date) > today {
+            return "\(fieldName) cannot be in the future."
+        }
+        return nil
+    }
+
+    private static func toggledSingleReaction(_ reactions: [String: [String]], emoji: String, userID: String) -> [String: [String]] {
+        let alreadySelected = reactions[emoji]?.contains(userID) == true
+        var updated = reactions.reduce(into: [String: [String]]()) { result, entry in
+            let users = entry.value.filter { $0 != userID }
+            if !users.isEmpty {
+                result[entry.key] = users
+            }
+        }
+        if !alreadySelected {
+            var users = updated[emoji] ?? []
+            users.append(userID)
+            updated[emoji] = users
+        }
+        return updated
+    }
+
+    private static func normalizedWords(_ value: String) -> String {
+        value
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     private static func normalizePhoneNumber(_ value: String) -> String {

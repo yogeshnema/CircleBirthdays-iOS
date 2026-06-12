@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Combine
 import PhotosUI
 import CoreLocation
 import UIKit
@@ -13,6 +14,10 @@ import AVKit
 import UniformTypeIdentifiers
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import os
+#if canImport(WeatherKit)
+import WeatherKit
+#endif
 
 private func localized(_ english: String, language: AppLanguage) -> String {
     guard language == .hindi else { return english }
@@ -23,6 +28,14 @@ private func localized(_ english: String, language: AppLanguage) -> String {
         "Phone Number": "फ़ोन नंबर",
         "Password": "पासवर्ड",
         "Login": "लॉगिन",
+        "Sign Up": "साइन अप",
+        "New user request": "नया यूज़र अनुरोध",
+        "Name": "नाम",
+        "Father/Mother Name": "पिता/माता का नाम",
+        "Mobile Number": "मोबाइल नंबर",
+        "Email ID": "ईमेल आईडी",
+        "Submit": "जमा करें",
+        "Request submitted for admin approval.": "अनुरोध एडमिन अनुमोदन के लिए भेज दिया गया है।",
         "Family circle, memories, conversations, and traditions.": "परिवार, यादें, बातचीत और परंपराएँ।",
         "Dashboard": "डैशबोर्ड",
         "Logout": "लॉग आउट",
@@ -121,10 +134,10 @@ private func localized(_ english: String, language: AppLanguage) -> String {
         "AI Assistant": "AI सहायक",
         "Family AI Assistant": "फैमिली AI सहायक",
         "Ask a question...": "सवाल पूछें...",
-        "AI Card Generator": "AI कार्ड जेनरेटर",
+        "AI Stationary Generator": "AI स्टेशनरी जेनरेटर",
         "Generate Card": "कार्ड बनाएं",
-        "Card Studio": "कार्ड स्टूडियो",
-        "Greeting cards": "ग्रीटिंग कार्ड",
+        "Stationary": "स्टेशनरी",
+        "Cards, stickers + collages": "कार्ड, स्टिकर + कोलाज",
         "Business": "व्यवसाय",
         "Business Directory": "व्यवसाय निर्देशिका",
         "Local services": "स्थानीय सेवाएं",
@@ -208,19 +221,22 @@ private func cardInnerWidth(for contentWidth: CGFloat) -> CGFloat {
 }
 
 private enum AndroidLook {
-    static let deepBrown = Color(red: 0x3E / 255.0, green: 0x27 / 255.0, blue: 0x23 / 255.0)
-    static let softBrown = Color(red: 0x5D / 255.0, green: 0x40 / 255.0, blue: 0x37 / 255.0)
-    static let mutedBrown = Color(red: 0x8D / 255.0, green: 0x6E / 255.0, blue: 0x63 / 255.0)
-    static let cream = Color(red: 0xEF / 255.0, green: 0xEB / 255.0, blue: 0xE9 / 255.0)
-    static let lightGolden = Color(red: 0xF5 / 255.0, green: 0xE6 / 255.0, blue: 0xBE / 255.0)
-    static let accentGold = Color(red: 0xDA / 255.0, green: 0xA5 / 255.0, blue: 0x20 / 255.0)
+    static let deepBrown = Color(red: 0x21 / 255.0, green: 0x13 / 255.0, blue: 0x10 / 255.0)
+    static let softBrown = Color(red: 0x3F / 255.0, green: 0x28 / 255.0, blue: 0x20 / 255.0)
+    static let mutedBrown = Color(red: 0x64 / 255.0, green: 0x46 / 255.0, blue: 0x3A / 255.0)
+    static let cream = Color(red: 0xFF / 255.0, green: 0xF8 / 255.0, blue: 0xEA / 255.0)
+    static let lightGolden = Color(red: 0xFF / 255.0, green: 0xF0 / 255.0, blue: 0xB8 / 255.0)
+    static let accentGold = Color(red: 0xF2 / 255.0, green: 0xB7 / 255.0, blue: 0x05 / 255.0)
+    static let darkBackground = Color(red: 0x08 / 255.0, green: 0x0B / 255.0, blue: 0x14 / 255.0)
+    static let darkSurface = Color(red: 0x12 / 255.0, green: 0x18 / 255.0, blue: 0x27 / 255.0)
+    static let darkPlum = Color(red: 0x24 / 255.0, green: 0x16 / 255.0, blue: 0x26 / 255.0)
 
     static var glassFill: LinearGradient {
         LinearGradient(
             colors: [
-                Color.white.opacity(0.72),
-                cream.opacity(0.64),
-                lightGolden.opacity(0.46)
+                Color.white.opacity(0.94),
+                cream.opacity(0.88),
+                lightGolden.opacity(0.72)
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
@@ -282,11 +298,49 @@ private func storedPhotoString(from imageData: Data) -> String {
     "data:image/jpeg;base64,\(imageData.base64EncodedString())"
 }
 
+private final class KeyboardState: ObservableObject {
+    @Published var bottomInset: CGFloat = 0
+
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        let willChange = NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)
+        let willHide = NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)
+
+        willChange
+            .merge(with: willHide)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                self?.handle(notification)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func handle(_ notification: Notification) {
+        guard notification.name != UIResponder.keyboardWillHideNotification,
+              let frame = notification.userInfo?[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else {
+            animate(to: 0, notification: notification)
+            return
+        }
+
+        let screenHeight = UIScreen.main.bounds.height
+        animate(to: max(0, screenHeight - frame.minY), notification: notification)
+    }
+
+    private func animate(to inset: CGFloat, notification: Notification) {
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        withAnimation(.easeOut(duration: duration)) {
+            bottomInset = inset
+        }
+    }
+}
+
 struct ContentView: View {
     @State private var viewModel = AppViewModel(
         memberRepository: MemberRepositoryFactory.makeRepository(),
         socialRepository: SocialRepositoryFactory.makeRepository()
     )
+    @StateObject private var keyboard = KeyboardState()
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -334,7 +388,7 @@ struct ContentView: View {
                         } else {
                             PlaceholderFeatureScreen(
                                 viewModel: viewModel,
-                                title: localized("AI Card Generator", language: viewModel.language),
+                                title: localized("AI Stationary Generator", language: viewModel.language),
                                 systemImage: "sparkles.rectangle.stack.fill",
                                 message: "Member profile could not be found."
                             )
@@ -358,7 +412,7 @@ struct ContentView: View {
                 FamilyAIAssistant(viewModel: viewModel)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     .padding(.leading, 14)
-                    .padding(.bottom, 14)
+                    .padding(.bottom, 14 + keyboard.bottomInset)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
@@ -406,7 +460,7 @@ private struct AppBackgroundLayer: View {
 
     var body: some View {
         ZStack {
-            Color.black
+            baseColor
                 .ignoresSafeArea()
 
             Image("Background")
@@ -428,14 +482,37 @@ private struct AppBackgroundLayer: View {
                 )
                 .ignoresSafeArea()
             case .androidTint:
-                Color.black
-                    .opacity(0.36)
-                    .ignoresSafeArea()
+                LinearGradient(
+                    colors: [
+                        AndroidLook.darkBackground.opacity(0.72),
+                        AndroidLook.darkSurface.opacity(0.62),
+                        AndroidLook.darkPlum.opacity(0.70)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
             case .flatDashboard:
-                Color.black
-                    .opacity(0.24)
-                    .ignoresSafeArea()
+                LinearGradient(
+                    colors: [
+                        AndroidLook.darkBackground.opacity(0.62),
+                        AndroidLook.darkSurface.opacity(0.48),
+                        AndroidLook.darkPlum.opacity(0.58)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
             }
+        }
+    }
+
+    private var baseColor: Color {
+        switch treatment {
+        case .light:
+            return Color.black
+        case .androidTint, .flatDashboard:
+            return AndroidLook.darkBackground
         }
     }
 
@@ -444,9 +521,9 @@ private struct AppBackgroundLayer: View {
         case .light:
             return 0.88
         case .androidTint:
-            return 0.96
+            return 0.38
         case .flatDashboard:
-            return 0.82
+            return 0.44
         }
     }
 }
@@ -475,6 +552,18 @@ private struct LoginScreen: View {
     @Bindable var viewModel: AppViewModel
     @State private var phoneNumber = ""
     @State private var password = ""
+    @State private var isSignupPresented = false
+    @State private var signupMessage: String?
+    private let loginTextColor = Color(red: 0x24 / 255.0, green: 0x18 / 255.0, blue: 0x14 / 255.0)
+    private let loginSecondaryTextColor = Color(red: 0x5C / 255.0, green: 0x40 / 255.0, blue: 0x33 / 255.0)
+    private let loginHeroTextColor = Color.white
+    private let loginHeroSecondaryTextColor = Color.white.opacity(0.92)
+
+    private var appVersionText: String {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "Version \(version) (\(build))"
+    }
 
     var body: some View {
         AppBackground(treatment: .light) {
@@ -523,20 +612,30 @@ private struct LoginScreen: View {
                             VStack(spacing: 4) {
                                 Text("Purawale")
                                     .font(.system(size: titleSize, weight: .bold, design: .serif))
+                                    .foregroundStyle(loginHeroTextColor)
+                                    .shadow(color: .black.opacity(0.62), radius: 3, x: 0, y: 1)
                                 Text("Hum aur Humare")
                                     .font(.system(size: subtitleSize, weight: .semibold))
-                                    .foregroundStyle(.secondary)
+                                    .foregroundStyle(loginHeroSecondaryTextColor)
+                                    .shadow(color: .black.opacity(0.62), radius: 3, x: 0, y: 1)
                             }
                         }
                         .frame(maxWidth: .infinity)
 
                         VStack(alignment: .leading, spacing: 12) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(localized("Sign in", language: viewModel.language))
-                                    .font(.headline)
-                                Text(localized("Use your family phone number to continue.", language: viewModel.language))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(localized("Sign in", language: viewModel.language))
+                                        .font(.headline)
+                                        .foregroundStyle(loginTextColor)
+                                    Text(localized("Use your family phone number to continue.", language: viewModel.language))
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(loginSecondaryTextColor)
+                                }
+
+                                Spacer(minLength: 8)
+
+                                languageToggle
                             }
 
                             TextField(localized("Phone Number", language: viewModel.language), text: $phoneNumber)
@@ -558,43 +657,81 @@ private struct LoginScreen: View {
                                     .foregroundStyle(.red)
                             }
 
-                            Button {
-                                viewModel.login(phoneNumber: phoneNumber, password: password)
-                            } label: {
-                                HStack {
-                                    Spacer()
-                                    Text(localized("Login", language: viewModel.language))
-                                        .fontWeight(.semibold)
-                                    Spacer()
-                                }
-                                .padding(.vertical, 13)
+                            if let signupMessage {
+                                Text(signupMessage)
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(.green)
                             }
-                            .buttonStyle(.plain)
-                            .background(
-                                LinearGradient(
-                                    colors: [Color.orange, Color.orange.opacity(0.76)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            )
-                            .foregroundStyle(.white)
-                            .shadow(color: .orange.opacity(0.20), radius: 10, x: 0, y: 6)
+
+                            HStack(spacing: 10) {
+                                Button {
+                                    signupMessage = nil
+                                    viewModel.login(phoneNumber: phoneNumber, password: password)
+                                } label: {
+                                    HStack {
+                                        Spacer()
+                                        Text(localized("Login", language: viewModel.language))
+                                            .fontWeight(.semibold)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 13)
+                                }
+                                .buttonStyle(.plain)
+                                .background(
+                                    LinearGradient(
+                                        colors: [Color.orange, Color.orange.opacity(0.76)],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    ),
+                                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                )
+                                .foregroundStyle(.white)
+                                .shadow(color: .orange.opacity(0.20), radius: 10, x: 0, y: 6)
+
+                                Button {
+                                    signupMessage = nil
+                                    isSignupPresented = true
+                                } label: {
+                                    HStack {
+                                        Spacer()
+                                        Text(localized("Sign Up", language: viewModel.language))
+                                            .fontWeight(.semibold)
+                                        Spacer()
+                                    }
+                                    .padding(.vertical, 13)
+                                }
+                                .buttonStyle(.plain)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                        .strokeBorder(Color.orange.opacity(0.45), lineWidth: 1)
+                                )
+                                .foregroundStyle(Color.orange)
+                            }
                             .frame(maxWidth: .infinity)
                         }
                         .padding(10)
                         .frame(width: cardWidth)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                        .background(
+                            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                                .fill(Color.white.opacity(0.88))
+                        )
+                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
                         .overlay(
                             RoundedRectangle(cornerRadius: 26, style: .continuous)
-                                .strokeBorder(Color.white.opacity(0.34), lineWidth: 1)
+                                .strokeBorder(Color.white.opacity(0.72), lineWidth: 1)
                         )
                         .shadow(color: .black.opacity(0.08), radius: 14, x: 0, y: 8)
 
                         Text(localized("Family circle, memories, conversations, and traditions.", language: viewModel.language))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(loginTextColor)
                             .multilineTextAlignment(.center)
+
+                        Text(appVersionText)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(loginHeroSecondaryTextColor)
+                            .shadow(color: .black.opacity(0.62), radius: 3, x: 0, y: 1)
 
                         Spacer(minLength: max(proxy.size.height * 0.06, 12))
                     }
@@ -612,16 +749,108 @@ private struct LoginScreen: View {
             }
         }
         }
-        .overlay(alignment: .topLeading) {
-            Button(viewModel.language.toggleLabel) {
-                viewModel.toggleLanguage()
+        .sheet(isPresented: $isSignupPresented) {
+            SignupRequestSheet(
+                language: viewModel.language,
+                onCancel: {
+                    isSignupPresented = false
+                },
+                onSubmit: { name, parentName, mobileNumber, email in
+                    let didSubmit = await viewModel.submitSignupRequest(
+                        name: name,
+                        parentName: parentName,
+                        mobileNumber: mobileNumber,
+                        email: email
+                    )
+                    if didSubmit {
+                        signupMessage = localized("Request submitted for admin approval.", language: viewModel.language)
+                        isSignupPresented = false
+                        return nil
+                    }
+                    return viewModel.loginError ?? "Could not submit request. Please check the details and try again."
+                }
+            )
+            .presentationDetents([.medium])
+        }
+    }
+
+    private var languageToggle: some View {
+        Button {
+            viewModel.toggleLanguage()
+        } label: {
+            Text(viewModel.language.toggleLabel)
+                .font(.caption.weight(.bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .foregroundStyle(.white)
+                .background(Color.orange, in: Capsule())
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.white.opacity(0.88), lineWidth: 1)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(viewModel.language == .english ? "Switch to Hindi" : "Switch to English")
+    }
+}
+
+private struct SignupRequestSheet: View {
+    let language: AppLanguage
+    let onCancel: () -> Void
+    let onSubmit: (String, String, String, String) async -> String?
+    @State private var name = ""
+    @State private var parentName = ""
+    @State private var mobileNumber = ""
+    @State private var email = ""
+    @State private var errorMessage: String?
+    @State private var isSubmitting = false
+
+    private var canSubmit: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !parentName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !mobileNumber.filter(\.isNumber).isEmpty
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(localized("Name", language: language), text: $name)
+                    .textContentType(.name)
+                TextField(localized("Father/Mother Name", language: language), text: $parentName)
+                    .textContentType(.name)
+                TextField(localized("Mobile Number", language: language), text: $mobileNumber)
+                    .textContentType(.telephoneNumber)
+                    .keyboardType(.phonePad)
+                TextField(localized("Email ID", language: language), text: $email)
+                    .textContentType(.emailAddress)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                if let errorMessage {
+                    Text(errorMessage)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.red)
+                }
             }
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
-            .background(.ultraThinMaterial, in: Capsule())
-            .padding(.leading, 12)
-            .padding(.top, 10)
+            .navigationTitle(localized("New user request", language: language))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(localized("Cancel", language: language), action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSubmitting ? "..." : localized("Submit", language: language)) {
+                        Task {
+                            isSubmitting = true
+                            errorMessage = nil
+                            errorMessage = await onSubmit(name, parentName, mobileNumber, email)
+                            isSubmitting = false
+                        }
+                    }
+                    .disabled(!canSubmit || isSubmitting)
+                }
+            }
         }
     }
 }
@@ -654,6 +883,11 @@ private struct DashboardScreen: View {
                                     dashboardAndroidTopBar(
                                     viewModel: viewModel,
                                     layoutScale: layoutScale,
+                                    onSyncAll: {
+                                        Task {
+                                            await viewModel.refreshAllData()
+                                        }
+                                    },
                                     onChangePassword: {
                                         isPasswordDialogPresented = true
                                     }
@@ -686,6 +920,7 @@ private struct DashboardScreen: View {
                                         }
                                         .buttonStyle(.plain)
                                     }
+                                    DashboardWeatherTile(layoutScale: layoutScale)
                                 }
 
                                 dashboardQuickActions(
@@ -774,12 +1009,14 @@ private struct DashboardScreen: View {
                             MemberEditScreen(
                                 originalMember: member,
                                 canSaveDirectly: viewModel.savesMemberEditsDirectly(member),
+                                showsFamilyId: viewModel.currentUser?.isEditor == true,
                                 language: viewModel.language,
                                 onSave: { updatedMember in
                                     Task {
-                                        await viewModel.saveMemberEdits(updatedMember)
+                                        if await viewModel.saveMemberEdits(updatedMember) {
+                                            editingSelf = nil
+                                        }
                                     }
-                                    editingSelf = nil
                                 },
                                 onRequestOverride: { relationship in
                                     Task {
@@ -812,19 +1049,160 @@ private struct ProfilesScreen: View {
                 if viewModel.hasAdminPrivileges && !viewModel.pendingMembers.isEmpty {
                     Section(localized("Pending Approvals", language: viewModel.language)) {
                         ForEach(viewModel.resolvedPendingMembers) { member in
-                            MemberListRow(
-                                member: member,
-                                showsPendingBadge: true,
-                                canEdit: viewModel.canEdit(member),
-                                canChat: false,
-                                canAdminManage: false,
-                                onEdit: { editingMember = member },
-                                onView: { viewingMember = member },
-                                onChat: {},
-                                onResetPassword: {},
-                                onRemovePhoto: {},
-                                onRemoveMember: {},
-                                onInviteWhatsApp: {}
+                            HStack(alignment: .center, spacing: 10) {
+                                MemberListRow(
+                                    member: member,
+                                    showsPendingBadge: true,
+                                    canEdit: viewModel.canEdit(member),
+                                    canChat: false,
+                                    canAdminManage: false,
+                                    onEdit: { editingMember = member },
+                                    onView: { viewingMember = member },
+                                    onChat: {},
+                                    onResetPassword: {},
+                                    onRemovePhoto: {},
+                                    onRemoveMember: {},
+                                    onInviteWhatsApp: {}
+                                )
+                                Spacer(minLength: 4)
+                                ApprovalIconButton(systemImage: "xmark", title: "Reject", role: .destructive) {
+                                    Task {
+                                        await viewModel.rejectPendingMember(member)
+                                    }
+                                }
+                                ApprovalIconButton(systemImage: "checkmark", title: "Approve", tint: .green) {
+                                    Task {
+                                        await viewModel.approvePendingMember(member)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if viewModel.hasAdminPrivileges && !viewModel.signupRequests.isEmpty {
+                    Section("Signup Requests") {
+                        ForEach(viewModel.signupRequests) { request in
+                            SignupApprovalRow(
+                                request: request,
+                                suggestedMember: viewModel.suggestedMember(for: request),
+                                assignableMembers: (viewModel.approvedMembers + viewModel.pendingMembers)
+                                    .sorted { $0.name < $1.name },
+                                onApprove: { member in
+                                    Task {
+                                        await viewModel.approveSignupRequest(request, assigningTo: member)
+                                    }
+                                },
+                                onReject: {
+                                    Task {
+                                        await viewModel.rejectSignupRequest(request)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if viewModel.hasAdminPrivileges && !viewModel.pendingMemories.isEmpty {
+                    Section("Pending Gallery Uploads") {
+                        ForEach(viewModel.pendingMemories) { memory in
+                            ContentApprovalRow(
+                                title: memory.caption.isEmpty ? "Photo from \(memory.userName)" : memory.caption,
+                                detail: "Gallery • \(memory.userName)",
+                                onApprove: {
+                                    Task {
+                                        await viewModel.approveMemory(memory)
+                                    }
+                                },
+                                onReject: {
+                                    Task {
+                                        await viewModel.deleteMemory(memory)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if viewModel.hasAdminPrivileges && !viewModel.pendingDiscussions.isEmpty {
+                    Section("Pending Discussions") {
+                        ForEach(viewModel.pendingDiscussions) { discussion in
+                            ContentApprovalRow(
+                                title: discussion.title,
+                                detail: "Discussion • \(discussion.userName)",
+                                onApprove: {
+                                    Task {
+                                        await viewModel.approveDiscussion(discussion)
+                                    }
+                                },
+                                onReject: {
+                                    Task {
+                                        await viewModel.rejectDiscussion(discussion)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if viewModel.hasAdminPrivileges && !viewModel.pendingRecipes.isEmpty {
+                    Section("Pending Recipes") {
+                        ForEach(viewModel.pendingRecipes) { recipe in
+                            ContentApprovalRow(
+                                title: recipe.title,
+                                detail: "Recipe • \(recipe.authorName)",
+                                onApprove: {
+                                    Task {
+                                        await viewModel.approveRecipe(recipe)
+                                    }
+                                },
+                                onReject: {
+                                    Task {
+                                        await viewModel.deleteRecipe(recipe)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if viewModel.hasAdminPrivileges && !viewModel.pendingTraditions.isEmpty {
+                    Section("Pending Traditions") {
+                        ForEach(viewModel.pendingTraditions) { tradition in
+                            ContentApprovalRow(
+                                title: tradition.title,
+                                detail: "Tradition • \(tradition.authorName)",
+                                onApprove: {
+                                    Task {
+                                        await viewModel.approveTradition(tradition)
+                                    }
+                                },
+                                onReject: {
+                                    Task {
+                                        await viewModel.deleteTradition(tradition)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+
+                if viewModel.hasAdminPrivileges && !viewModel.pendingMilestones.isEmpty {
+                    Section("Pending Milestones") {
+                        ForEach(viewModel.pendingMilestones) { milestone in
+                            ContentApprovalRow(
+                                title: milestone.title,
+                                detail: "Milestone • \(milestone.authorName)",
+                                onApprove: {
+                                    Task {
+                                        await viewModel.approveMilestone(milestone)
+                                    }
+                                },
+                                onReject: {
+                                    Task {
+                                        await viewModel.deleteMilestone(milestone)
+                                    }
+                                }
                             )
                         }
                     }
@@ -911,12 +1289,14 @@ private struct ProfilesScreen: View {
                     MemberEditScreen(
                         originalMember: member,
                         canSaveDirectly: viewModel.savesMemberEditsDirectly(member),
+                        showsFamilyId: viewModel.currentUser?.isEditor == true,
                         language: viewModel.language,
                         onSave: { updatedMember in
                             Task {
-                                await viewModel.saveMemberEdits(updatedMember)
+                                if await viewModel.saveMemberEdits(updatedMember) {
+                                    editingMember = nil
+                                }
                             }
-                            editingMember = nil
                         },
                         onRequestOverride: { relationship in
                             Task {
@@ -1118,7 +1498,7 @@ private struct GalleryScreen: View {
                                     memory: memory,
                                     contentWidth: contentWidth,
                                     canRequestDelete: viewModel.canRequestContentDeletion(authorId: memory.userId),
-                                    canApprove: viewModel.hasAdminPrivileges && memory.status == "PENDING",
+                                    canApprove: viewModel.hasAdminPrivileges && memory.status.isPendingStatus,
                                     onRequestDelete: {
                                         pendingDeletionRequest = PendingDeletionRequest(
                                             collectionName: "memories",
@@ -1217,7 +1597,7 @@ private struct DiscussionsScreen: View {
                                 DiscussionCard(
                                     discussion: discussion,
                                     canRequestDelete: viewModel.canRequestContentDeletion(authorId: discussion.userId),
-                                    canApprove: viewModel.hasAdminPrivileges && discussion.status == "PENDING",
+                                    canApprove: viewModel.hasAdminPrivileges && discussion.status.isPendingStatus,
                                     onRequestDelete: {
                                         pendingDeletionRequest = PendingDeletionRequest(
                                             collectionName: "discussions",
@@ -1323,7 +1703,7 @@ private struct CookbookScreen: View {
                                     contentWidth: contentWidth,
                                     canEdit: viewModel.canManageContent(authorId: recipe.authorId),
                                     canRequestDelete: viewModel.canRequestContentDeletion(authorId: recipe.authorId),
-                                    canApprove: viewModel.hasAdminPrivileges && recipe.status == "PENDING",
+                                    canApprove: viewModel.hasAdminPrivileges && recipe.status.isPendingStatus,
                                     onEdit: {
                                         editingRecipe = recipe
                                         showEditor = true
@@ -1447,7 +1827,7 @@ private struct TraditionsScreen: View {
                                     contentWidth: contentWidth,
                                     canEdit: viewModel.canManageContent(authorId: tradition.authorId),
                                     canRequestDelete: viewModel.canRequestContentDeletion(authorId: tradition.authorId),
-                                    canApprove: viewModel.hasAdminPrivileges && tradition.status == "PENDING",
+                                    canApprove: viewModel.hasAdminPrivileges && tradition.status.isPendingStatus,
                                     onEdit: {
                                         editingTradition = tradition
                                         showEditor = true
@@ -1751,7 +2131,7 @@ private struct MemoryLaneScreen: View {
                                         viewModel.canRequestContentDeletion(authorId: milestone.authorId)
                                     },
                                     canApprove: { milestone in
-                                        viewModel.hasAdminPrivileges && milestone.status == "PENDING"
+                                        viewModel.hasAdminPrivileges && milestone.status.isPendingStatus
                                     },
                                     onEdit: { milestone in
                                         editingMilestone = milestone
@@ -1920,6 +2300,7 @@ private struct MessagesScreen: View {
 private func dashboardAndroidTopBar(
     viewModel: AppViewModel,
     layoutScale: CGFloat,
+    onSyncAll: @escaping () -> Void,
     onChangePassword: @escaping () -> Void
 ) -> some View {
     HStack(alignment: .center, spacing: 10) {
@@ -1954,6 +2335,12 @@ private func dashboardAndroidTopBar(
         )
 
         DashboardTopIconButton(
+            systemImage: "arrow.triangle.2.circlepath",
+            isBusy: viewModel.isSyncingAll,
+            action: onSyncAll
+        )
+
+        DashboardTopIconButton(
             systemImage: "key.fill",
             action: onChangePassword
         )
@@ -1965,7 +2352,7 @@ private func dashboardAndroidTopBar(
     }
     .padding(.horizontal, 14)
     .padding(.vertical, 14)
-    .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     .overlay(
         RoundedRectangle(cornerRadius: 18, style: .continuous)
             .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -2006,15 +2393,23 @@ private struct BranchSwitch: View {
 private struct DashboardTopIconButton: View {
     let systemImage: String
     var badge: Int = 0
+    var isBusy: Bool = false
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             ZStack(alignment: .topTrailing) {
-                Image(systemName: systemImage)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(AndroidLook.deepBrown)
-                    .frame(width: 30, height: 30)
+                if isBusy {
+                    ProgressView()
+                        .controlSize(.mini)
+                        .tint(AndroidLook.deepBrown)
+                        .frame(width: 30, height: 30)
+                } else {
+                    Image(systemName: systemImage)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(AndroidLook.deepBrown)
+                        .frame(width: 30, height: 30)
+                }
 
                 if badge > 0 {
                     Text("\(min(badge, 99))")
@@ -2028,6 +2423,7 @@ private struct DashboardTopIconButton: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(isBusy)
     }
 }
 
@@ -2160,7 +2556,7 @@ private func dashboardHeroCard(
         }
         .padding(max(18.0, 20.0 * layoutScale))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.60), in: RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous))
+        .background(Color.white.opacity(0.86), in: RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: max(18.0, 20.0 * layoutScale), style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -2408,8 +2804,8 @@ private func dashboardQuickActions(
                     viewModel.showNearestAICardGenerator()
                 } label: {
                     DashboardActionLabel(
-                        title: localized("Card Studio", language: viewModel.language),
-                        subtitle: localized("Greeting cards", language: viewModel.language),
+                        title: localized("Stationary", language: viewModel.language),
+                        subtitle: localized("Cards, stickers + collages", language: viewModel.language),
                         systemImage: "sparkles.rectangle.stack.fill",
                         tint: AndroidLook.softBrown,
                         background: LinearGradient(colors: [Color.yellow.opacity(0.28), Color.pink.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing),
@@ -2929,23 +3325,9 @@ private struct ChatScreen: View {
                         }
                     }
                 }
-
-                HStack(spacing: 10) {
-                    TextField("Type a message...", text: $draft, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-
-                    Button {
-                        viewModel.sendMessage(draft, to: memberID)
-                        draft = ""
-                    } label: {
-                        Image(systemName: "paperplane.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-                .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-                .background(.thinMaterial)
+            }
+            .safeAreaInset(edge: .bottom) {
+                messageComposer
             }
             .navigationTitle(otherMember?.name ?? localized("Chat", language: viewModel.language))
             .toolbar {
@@ -2964,6 +3346,27 @@ private struct ChatScreen: View {
                 }
             }
         }
+    }
+
+    private var messageComposer: some View {
+        HStack(spacing: 10) {
+            TextField("Type a message...", text: $draft, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+                .lineLimit(1...4)
+
+            Button {
+                viewModel.sendMessage(draft, to: memberID)
+                draft = ""
+            } label: {
+                Image(systemName: "paperplane.fill")
+                    .frame(width: 34, height: 34)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.thinMaterial)
     }
 }
 
@@ -3063,7 +3466,7 @@ private struct MemberListRow: View {
         .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
-        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -3113,21 +3516,14 @@ private struct MemoryCard: View {
             Button(action: onOpen) {
                 Group {
                     if let imageURL = URL(string: memory.imageURL), !memory.imageURL.isEmpty {
-                        AsyncImage(url: imageURL) { phase in
-                            switch phase {
-                            case let .success(image):
-                                image
-                                    .resizable()
-                                    .scaledToFill()
-                            case .failure(_):
+                        CachedRemoteImage(url: imageURL) { image in
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        } placeholder: {
+                            ZStack {
                                 galleryPlaceholder
-                            case .empty:
-                                ZStack {
-                                    galleryPlaceholder
-                                    ProgressView()
-                                }
-                            @unknown default:
-                                galleryPlaceholder
+                                ProgressView()
                             }
                         }
                     } else {
@@ -3152,7 +3548,7 @@ private struct MemoryCard: View {
                 Text("\(memory.comments.count) comments")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if memory.status == "PENDING" {
+                if memory.status.isPendingStatus {
                     Text("Pending")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.orange)
@@ -3229,25 +3625,19 @@ private struct FullScreenMemoryPhotoView: View {
             Color.black.ignoresSafeArea()
 
             if let url = URL(string: memory.imageURL), !memory.imageURL.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFit()
-                            .scaleEffect(scale)
-                            .offset(offset)
-                            .gesture(zoomGesture.simultaneously(with: dragGesture))
-                            .onTapGesture(count: 2) {
-                                resetZoom()
-                            }
-                    case .empty:
-                        ProgressView()
-                            .tint(.white)
-                    default:
-                        ContentUnavailableView("Photo", systemImage: "photo", description: Text("Unable to load image."))
-                            .foregroundStyle(.white)
-                    }
+                CachedRemoteImage(url: url) { image in
+                    image
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(scale)
+                        .offset(offset)
+                        .gesture(zoomGesture.simultaneously(with: dragGesture))
+                        .onTapGesture(count: 2) {
+                            resetZoom()
+                        }
+                } placeholder: {
+                    ProgressView()
+                        .tint(.white)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -3337,7 +3727,7 @@ private struct DiscussionCard: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(Color.orange.opacity(0.12), in: Capsule())
-                if discussion.status == "PENDING" {
+                if discussion.status.isPendingStatus {
                     Text("Pending")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.orange)
@@ -3407,13 +3797,10 @@ private struct RecipeCard: View {
 
         VStack(alignment: .leading, spacing: 12) {
             if let url = URL(string: recipe.imageURL), !recipe.imageURL.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image.resizable().scaledToFill()
-                    default:
-                        recipePlaceholder
-                    }
+                CachedRemoteImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    recipePlaceholder
                 }
                 .frame(width: imageWidth, height: 190)
                 .clipped()
@@ -3432,7 +3819,7 @@ private struct RecipeCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if recipe.status == "PENDING" {
+                if recipe.status.isPendingStatus {
                     Text("Pending")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.orange)
@@ -3513,13 +3900,10 @@ private struct TraditionCard: View {
 
         VStack(alignment: .leading, spacing: 12) {
             if let url = URL(string: tradition.imageURL), !tradition.imageURL.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image.resizable().scaledToFill()
-                    default:
-                        traditionPlaceholder
-                    }
+                CachedRemoteImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    traditionPlaceholder
                 }
                 .frame(width: imageWidth, height: 180)
                 .clipped()
@@ -3538,7 +3922,7 @@ private struct TraditionCard: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if tradition.status == "PENDING" {
+                if tradition.status.isPendingStatus {
                     Text("Pending")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.orange)
@@ -3615,13 +3999,10 @@ private struct MilestoneCard: View {
 
         VStack(alignment: .leading, spacing: 12) {
             if let url = URL(string: milestone.imageURL), !milestone.imageURL.isEmpty {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image.resizable().scaledToFill()
-                    default:
-                        milestonePlaceholder
-                    }
+                CachedRemoteImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    milestonePlaceholder
                 }
                 .frame(width: imageWidth, height: 170)
                 .clipped()
@@ -3649,7 +4030,7 @@ private struct MilestoneCard: View {
                     }
                 }
                 Spacer()
-                if milestone.status == "PENDING" {
+                if milestone.status.isPendingStatus {
                     Text("Pending")
                         .font(.caption2.weight(.bold))
                         .foregroundStyle(.orange)
@@ -3796,27 +4177,153 @@ private struct RecipeDetailSheet: View {
     }
 
     private var reactionBar: some View {
-        let emojis = ["❤️", "🙏", "👍", "🔥"]
-        return HStack(spacing: 10) {
-            ForEach(emojis, id: \.self) { emoji in
-                let count = recipe.reactions[emoji]?.count ?? 0
-                Button {
-                    Task {
-                        await viewModel.toggleRecipeReaction(recipe, emoji: emoji)
-                        if let latest = viewModel.visibleRecipes.first(where: { $0.id == recipe.id }) {
-                            recipe = latest
-                        }
-                    }
-                } label: {
-                    Text("\(emoji) \(count)")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.06), in: Capsule())
+        ReactionBarView(
+            reactions: recipe.reactions,
+            currentUserId: viewModel.currentUser?.id,
+            members: viewModel.allResolvedMembers
+        ) { emoji in
+            Task {
+                await viewModel.toggleRecipeReaction(recipe, emoji: emoji)
+                if let latest = viewModel.visibleRecipes.first(where: { $0.id == recipe.id }) {
+                    recipe = latest
                 }
-                .buttonStyle(.plain)
             }
         }
+    }
+}
+
+private struct ReactionBarView: View {
+    private let emojis = ["❤️", "🙏", "👍", "🔥"]
+    let reactions: [String: [String]]
+    let currentUserId: String?
+    let members: [Member]
+    let onToggle: (String) -> Void
+    @State private var hoveredEmoji: String?
+    @State private var selectedContributors: ReactionContributorSelection?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(emojis, id: \.self) { emoji in
+                let users = reactions[emoji] ?? []
+                let isSelected = currentUserId.map { users.contains($0) } ?? false
+                ReactionPillView(
+                    emoji: emoji,
+                    count: users.count,
+                    isSelected: isSelected,
+                    onToggle: {
+                        onToggle(emoji)
+                    },
+                    onLongPress: {
+                        guard !users.isEmpty else { return }
+                        selectedContributors = ReactionContributorSelection(
+                            emoji: emoji,
+                            count: users.count,
+                            names: contributorNames(for: emoji)
+                        )
+                    }
+                )
+                .help(contributorText(for: emoji))
+                .onHover { isHovering in
+                    hoveredEmoji = isHovering ? emoji : (hoveredEmoji == emoji ? nil : hoveredEmoji)
+                }
+                .popover(isPresented: Binding(
+                    get: { hoveredEmoji == emoji && !users.isEmpty },
+                    set: { if !$0, hoveredEmoji == emoji { hoveredEmoji = nil } }
+                )) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("\(emoji) \(users.count)")
+                            .font(.headline)
+                        Text(contributorNames(for: emoji).joined(separator: "\n"))
+                            .font(.subheadline)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(12)
+                    .frame(minWidth: 180, alignment: .leading)
+                }
+            }
+        }
+        .sheet(item: $selectedContributors) { selection in
+            ReactionContributorsSheet(selection: selection)
+        }
+    }
+
+    private func contributorText(for emoji: String) -> String {
+        let names = contributorNames(for: emoji)
+        guard !names.isEmpty else { return "No reactions yet" }
+        return names.joined(separator: ", ")
+    }
+
+    private func contributorNames(for emoji: String) -> [String] {
+        (reactions[emoji] ?? []).map { userId in
+            if let member = members.first(where: { $0.id == userId }) {
+                return member.name
+            }
+            if userId == currentUserId {
+                return "You"
+            }
+            return userId
+        }
+    }
+}
+
+private struct ReactionPillView: View {
+    let emoji: String
+    let count: Int
+    let isSelected: Bool
+    let onToggle: () -> Void
+    let onLongPress: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            Text("\(emoji) \(count)")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .background(isSelected ? Color.orange.opacity(0.20) : Color.black.opacity(0.06), in: Capsule())
+        .overlay(
+            Capsule()
+                .strokeBorder(isSelected ? Color.orange.opacity(0.65) : Color.clear, lineWidth: 1)
+        )
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.45)
+                .onEnded { _ in
+                    onLongPress()
+                }
+        )
+    }
+}
+
+private struct ReactionContributorSelection: Identifiable {
+    let id = UUID()
+    let emoji: String
+    let count: Int
+    let names: [String]
+}
+
+private struct ReactionContributorsSheet: View {
+    let selection: ReactionContributorSelection
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("\(selection.emoji) \(selection.count)") {
+                    ForEach(selection.names, id: \.self) { name in
+                        Label(name, systemImage: "person.crop.circle")
+                    }
+                }
+            }
+            .navigationTitle("Reactions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                Button("Close") {
+                    dismiss()
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -3883,25 +4390,16 @@ private struct TraditionDetailSheet: View {
     }
 
     private var reactionBar: some View {
-        let emojis = ["❤️", "🙏", "👍", "🔥"]
-        return HStack(spacing: 10) {
-            ForEach(emojis, id: \.self) { emoji in
-                let count = tradition.reactions[emoji]?.count ?? 0
-                Button {
-                    Task {
-                        await viewModel.toggleTraditionReaction(tradition, emoji: emoji)
-                        if let latest = viewModel.visibleTraditions.first(where: { $0.id == tradition.id }) {
-                            tradition = latest
-                        }
-                    }
-                } label: {
-                    Text("\(emoji) \(count)")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.06), in: Capsule())
+        ReactionBarView(
+            reactions: tradition.reactions,
+            currentUserId: viewModel.currentUser?.id,
+            members: viewModel.allResolvedMembers
+        ) { emoji in
+            Task {
+                await viewModel.toggleTraditionReaction(tradition, emoji: emoji)
+                if let latest = viewModel.visibleTraditions.first(where: { $0.id == tradition.id }) {
+                    tradition = latest
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -3981,25 +4479,16 @@ private struct MilestoneDetailSheet: View {
     }
 
     private var reactionBar: some View {
-        let emojis = ["❤️", "🙏", "👍", "🔥"]
-        return HStack(spacing: 10) {
-            ForEach(emojis, id: \.self) { emoji in
-                let count = milestone.reactions[emoji]?.count ?? 0
-                Button {
-                    Task {
-                        await viewModel.toggleMilestoneReaction(milestone, emoji: emoji)
-                        if let latest = viewModel.visibleMilestones.first(where: { $0.id == milestone.id }) {
-                            milestone = latest
-                        }
-                    }
-                } label: {
-                    Text("\(emoji) \(count)")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.06), in: Capsule())
+        ReactionBarView(
+            reactions: milestone.reactions,
+            currentUserId: viewModel.currentUser?.id,
+            members: viewModel.allResolvedMembers
+        ) { emoji in
+            Task {
+                await viewModel.toggleMilestoneReaction(milestone, emoji: emoji)
+                if let latest = viewModel.visibleMilestones.first(where: { $0.id == milestone.id }) {
+                    milestone = latest
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -4125,25 +4614,16 @@ private struct MemoryDetailSheet: View {
     }
 
     private var reactionBar: some View {
-        let emojis = ["❤️", "🙏", "👍", "🔥"]
-        return HStack(spacing: 10) {
-            ForEach(emojis, id: \.self) { emoji in
-                let count = memory.reactions[emoji]?.count ?? 0
-                Button {
-                    Task {
-                        await viewModel.toggleMemoryReaction(memory, emoji: emoji)
-                        if let latest = viewModel.memories.first(where: { $0.id == memory.id }) {
-                            memory = latest
-                        }
-                    }
-                } label: {
-                    Text("\(emoji) \(count)")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.06), in: Capsule())
+        ReactionBarView(
+            reactions: memory.reactions,
+            currentUserId: viewModel.currentUser?.id,
+            members: viewModel.allResolvedMembers
+        ) { emoji in
+            Task {
+                await viewModel.toggleMemoryReaction(memory, emoji: emoji)
+                if let latest = viewModel.memories.first(where: { $0.id == memory.id }) {
+                    memory = latest
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -4158,19 +4638,31 @@ private struct AudioPlayerWidget: View {
     let language: AppLanguage
     @State private var player: AVPlayer?
     @State private var isPlaying = false
+    @State private var cachedURL: URL?
+    @State private var isPreparing = false
 
     var body: some View {
         HStack(spacing: 10) {
             Button {
-                togglePlayback()
+                Task {
+                    await togglePlayback()
+                }
             } label: {
-                Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                    .font(.headline)
-                    .frame(width: 34, height: 34)
-                    .background(AndroidLook.lightGolden.opacity(0.62), in: Circle())
+                ZStack {
+                    if isPreparing {
+                        ProgressView()
+                            .controlSize(.mini)
+                    } else {
+                        Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                            .font(.headline)
+                    }
+                }
+                .frame(width: 34, height: 34)
+                .background(AndroidLook.lightGolden.opacity(0.62), in: Circle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(AndroidLook.softBrown)
+            .disabled(isPreparing)
 
             Text(isPlaying ? localized("Playing voice memory...", language: language) : localized("Voice Memory", language: language))
                 .font(.subheadline.weight(.semibold))
@@ -4188,20 +4680,39 @@ private struct AudioPlayerWidget: View {
             player?.pause()
             isPlaying = false
         }
+        .task(id: urlString) {
+            cachedURL = await preparedAudioURL()
+        }
     }
 
-    private func togglePlayback() {
-        guard let url = URL(string: urlString) else { return }
-        if player == nil {
-            player = AVPlayer(url: url)
-        }
+    private func togglePlayback() async {
         if isPlaying {
             player?.pause()
             isPlaying = false
-        } else {
-            player?.play()
-            isPlaying = true
+            return
         }
+
+        isPreparing = true
+        let url: URL?
+        if let cachedURL {
+            url = cachedURL
+        } else {
+            url = await preparedAudioURL()
+        }
+        cachedURL = url
+        isPreparing = false
+        guard let url else { return }
+
+        if player == nil {
+            player = AVPlayer(url: url)
+        }
+        player?.play()
+        isPlaying = true
+    }
+
+    private func preparedAudioURL() async -> URL? {
+        guard let url = URL(string: urlString) else { return nil }
+        return (try? await RemoteMediaCache.shared.cachedFileURL(for: url)) ?? url
     }
 }
 
@@ -4210,34 +4721,49 @@ private struct MemoryEditorSheet: View {
     let onClose: () -> Void
 
     @State private var caption = ""
-    @State private var selectedItem: PhotosPickerItem?
-    @State private var selectedData: Data?
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedPhotos: [MemoryPhotoSelection] = []
     @State private var isPosting = false
+    @State private var postingProgress = ""
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    PhotosPicker(selection: $selectedItem, matching: .images) {
+                    PhotosPicker(selection: $selectedItems, maxSelectionCount: 20, matching: .images) {
                         HStack {
                             Image(systemName: "photo.on.rectangle")
-                            Text(selectedData == nil ? "Choose from Photos" : "Change Photo")
+                            Text(selectedPhotos.isEmpty ? "Choose Photos" : "\(selectedPhotos.count) Photos Selected")
                         }
                     }
 
-                    if let selectedData,
-                       let image = UIImage(data: selectedData) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 240)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    if !selectedPhotos.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(selectedPhotos) { photo in
+                                    if let image = UIImage(data: photo.data) {
+                                        Image(uiImage: image)
+                                            .resizable()
+                                            .scaledToFill()
+                                            .frame(width: 84, height: 84)
+                                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    }
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
                     }
 
                     TextField("Caption", text: $caption, axis: .vertical)
+
+                    if !postingProgress.isEmpty {
+                        Text(postingProgress)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            .navigationTitle("Post Photo")
+            .navigationTitle("Post Photos")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -4247,13 +4773,18 @@ private struct MemoryEditorSheet: View {
                     Button(isPosting ? "Posting..." : "Post") {
                         Task { await post() }
                     }
-                    .disabled(isPosting || selectedData == nil)
+                    .disabled(isPosting || selectedPhotos.isEmpty)
                 }
             }
-            .onChange(of: selectedItem) { _, newValue in
-                guard let newValue else { return }
+            .onChange(of: selectedItems) { _, newValue in
                 Task {
-                    selectedData = try? await newValue.loadTransferable(type: Data.self)
+                    var loadedPhotos: [MemoryPhotoSelection] = []
+                    for item in newValue {
+                        if let data = try? await item.loadTransferable(type: Data.self) {
+                            loadedPhotos.append(MemoryPhotoSelection(data: data))
+                        }
+                    }
+                    selectedPhotos = loadedPhotos
                 }
             }
         }
@@ -4261,41 +4792,56 @@ private struct MemoryEditorSheet: View {
 
     private func post() async {
         guard let currentUser = viewModel.currentUser else { return }
-        guard let selectedData else { return }
+        guard !selectedPhotos.isEmpty else { return }
         isPosting = true
-        defer { isPosting = false }
+        defer {
+            isPosting = false
+            postingProgress = ""
+        }
 
-        guard let url = await viewModel.uploadImageData(selectedData, folder: "memories") else { return }
+        let trimmedCaption = caption.trimmingCharacters(in: .whitespacesAndNewlines)
+        var postedCount = 0
 
-        let memory = MemoryPost(
-            id: UUID().uuidString,
-            userId: currentUser.id,
-            userName: currentUser.name,
-            imageURL: url,
-            caption: caption.trimmingCharacters(in: .whitespacesAndNewlines),
-            timestamp: .now,
-            status: viewModel.newContentStatus,
-            reactions: [:],
-            comments: []
-        )
+        for (index, photo) in selectedPhotos.enumerated() {
+            postingProgress = "Uploading \(index + 1) of \(selectedPhotos.count)"
+            guard let url = await viewModel.uploadImageData(photo.data, folder: "memories") else { continue }
 
-        await viewModel.saveMemory(memory)
-        onClose()
+            let memory = MemoryPost(
+                id: UUID().uuidString,
+                userId: currentUser.id,
+                userName: currentUser.name,
+                imageURL: url,
+                caption: trimmedCaption,
+                timestamp: .now,
+                status: viewModel.newContentStatus,
+                reactions: [:],
+                comments: []
+            )
+
+            await viewModel.saveMemory(memory)
+            postedCount += 1
+        }
+
+        if postedCount > 0 {
+            onClose()
+        }
     }
+}
+
+private struct MemoryPhotoSelection: Identifiable {
+    let id = UUID()
+    let data: Data
 }
 
 private func detailImage(urlString: String) -> some View {
     Group {
         if let url = URL(string: urlString), !urlString.isEmpty {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image.resizable().scaledToFit()
-                default:
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.black.opacity(0.06))
-                        .frame(height: 180)
-                }
+            CachedRemoteImage(url: url) { image in
+                image.resizable().scaledToFit()
+            } placeholder: {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(Color.black.opacity(0.06))
+                    .frame(height: 180)
             }
         } else {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -4761,7 +5307,8 @@ private struct FamilyEventRow: View {
         eventRow
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -4955,11 +5502,29 @@ private struct FamilyAIAssistant: View {
     private func answer(for question: String) -> String {
         let lower = question.lowercased()
         let members = viewModel.allResolvedMembers
+        if isAssistantGreeting(lower) {
+            assistantContext.reset()
+            return "Hi! Ask me about birthdays, anniversaries, profile details, locations, phone numbers, family relationships, or counts from the saved family directory."
+        }
+
+        if let selfMatch = currentUserMatch(in: members), isSelfReferenceQuestion(lower) {
+            assistantContext.rememberResolved(selfMatch)
+            return answerForSelfQuestion(lower, match: selfMatch, members: members)
+        }
+
         let directMatches = findMemberMatches(question: question, members: members)
         let selectedPendingMatch = assistantContext.matchFromPendingSelection(question)
         let usesPreviousContext = directMatches.isEmpty && selectedPendingMatch == nil && isAssistantFollowUpQuestion(lower)
         let matches = selectedPendingMatch.map { [$0] }
             ?? (usesPreviousContext ? assistantContext.lastMatches : directMatches)
+
+        if let directoryAnswer = AssistantDirectoryQuery.answer(
+            question: lower,
+            members: members,
+            matchedMembers: directMatches.map(\.member)
+        ) {
+            return directoryAnswer
+        }
 
         if isBirthdayQuestion(lower) {
             if matches.count > 1 {
@@ -5017,13 +5582,21 @@ private struct FamilyAIAssistant: View {
             return "There are \(viewModel.activeMembers.count) approved active members, \(viewModel.pendingCount) pending profiles, and \(viewModel.visibleChannels.count) chat threads visible to you."
         }
 
+        if matches.isEmpty, isRelationshipQuestion(lower) {
+            return "Tell me the person's name too, and I can explain the relationship using RelationshipRules.md."
+        }
+
         if matches.count > 1 {
             assistantContext.remember(matches)
-            let options = matches.map { "- \($0.member.name) (\($0.member.familyId))" }.joined(separator: "\n")
+            let options = matches.map { "- \(AssistantDirectoryQuery.memberChoiceLine($0.member))" }.joined(separator: "\n")
             return "I found multiple matching people. Which one do you mean?\n\(options)"
         }
 
         if let match = matches.first {
+            if usesPreviousContext && !isAssistantContextReuseQuestion(lower) {
+                return "Tell me the person’s name or the detail you want, and I’ll look it up from the saved family directory."
+            }
+
             assistantContext.rememberResolved(match)
             let member = match.member
             let prefix = assistantContextPrefix(match: match, usesPreviousContext: usesPreviousContext)
@@ -5039,10 +5612,7 @@ private struct FamilyAIAssistant: View {
             }
 
             if isRelationshipQuestion(lower) {
-                let relation = member.relationship
-                    ?? viewModel.currentUser.flatMap { FamilyUtils.getRelationship(target: member, observer: $0, allMembers: members) }
-                    ?? "not saved"
-                return "\(prefix)\(member.name)'s relationship is \(relation)."
+                return prefix + relationshipAnswer(for: member, members: members)
             }
 
             let relation = member.relationship
@@ -5052,13 +5622,378 @@ private struct FamilyAIAssistant: View {
             return "\(prefix)\(member.name) is \(relation). Family ID: \(member.familyId).\(location)"
         }
 
-        return "I can answer from the local family directory: birthdays, anniversaries, today/upcoming events, member counts, locations, and relationships. Try asking for a person's name."
+        return "I can answer from the local family directory: birthdays, birth years, anniversaries, today/upcoming events, member counts, locations, profile matches, and relationships. Try asking “how many people were born in 1985?” or a person’s name."
+    }
+
+    private func currentUserMatch(in members: [Member]) -> AssistantMemberMatch? {
+        guard let currentUser = viewModel.currentUser else { return nil }
+        let resolvedUser = members.first { $0.id == currentUser.id } ?? currentUser
+        return AssistantMemberMatch(member: resolvedUser, score: 200, isFuzzy: false)
+    }
+
+    private func answerForSelfQuestion(_ question: String, match: AssistantMemberMatch, members: [Member]) -> String {
+        let member = match.member
+
+        if isBirthdayQuestion(question) {
+            let date = shortDisplayDate(member.dateOfBirth) ?? "not saved"
+            return "Your birthday is \(date)."
+        }
+
+        if isAnniversaryQuestion(question) {
+            let date = shortDisplayDate(member.marriageDate) ?? "not saved"
+            return "Your anniversary is \(date)."
+        }
+
+        if isLocationQuestion(question) {
+            let location = member.location?.isEmpty == false ? member.location! : "not saved"
+            return "Your location is \(location)."
+        }
+
+        if isPhoneQuestion(question) {
+            let phone = member.phoneNumber.isEmpty ? "not saved" : member.phoneNumber
+            return "Your phone number is \(phone)."
+        }
+
+        if isRelationshipQuestion(question) {
+            return relationshipAnswer(for: member, members: members)
+        }
+
+        return selfProfileSummary(member)
+    }
+
+    private func selfProfileSummary(_ member: Member) -> String {
+        var details = ["You are \(member.name)."]
+        details.append("Family ID: \(member.familyId).")
+
+        if let fatherName = member.fatherName, !fatherName.isEmpty {
+            details.append("Father: \(fatherName).")
+        }
+        if let motherName = member.motherName, !motherName.isEmpty {
+            details.append("Mother: \(motherName).")
+        }
+        if let spouseName = member.spouseName, !spouseName.isEmpty {
+            details.append("Spouse: \(spouseName).")
+        }
+        if let birthday = shortDisplayDate(member.dateOfBirth) {
+            details.append("Birthday: \(birthday).")
+        }
+        if !member.phoneNumber.isEmpty {
+            details.append("Mobile: \(member.phoneNumber).")
+        }
+        if let email = member.email, !email.isEmpty {
+            details.append("Email: \(email).")
+        }
+        if let location = member.location, !location.isEmpty {
+            details.append("Location: \(location).")
+        }
+        if member.isAdmin {
+            details.append("You have admin access.")
+        } else if member.isEditor {
+            details.append("You have editor access.")
+        }
+
+        return details.joined(separator: " ")
     }
 
     private func assistantContextPrefix(match: AssistantMemberMatch, usesPreviousContext: Bool) -> String {
         if usesPreviousContext { return "Using the previous person, \(match.member.name): " }
         if match.isFuzzy { return "Closest match: \(match.member.name). " }
         return ""
+    }
+
+    private func relationshipAnswer(for member: Member, members: [Member]) -> String {
+        guard let currentUser = viewModel.currentUser else {
+            return "\(member.name)'s relationship needs a logged-in user as the point of view."
+        }
+
+        let resolvedObserver = members.first { $0.id == currentUser.id } ?? currentUser
+        if member.id == resolvedObserver.id {
+            let rule = RelationshipRulesGuide.rule(for: "Self")
+            return "You are viewing your own profile. \(rule)"
+        }
+
+        let inferredRelation = FamilyUtils.getRelationship(target: member, observer: resolvedObserver, allMembers: members)
+        let relation = member.manualRelationships[resolvedObserver.id]
+            ?? inferredRelation
+            ?? member.relationship
+            ?? "not saved"
+
+        guard relation != "not saved" else {
+            return "I could not infer \(member.name)'s relationship from the saved family IDs yet. Please check their family ID, parents, spouse link, and gender."
+        }
+
+        let rule = RelationshipRulesGuide.rule(for: relation)
+        let path = RelationshipRulesGuide.pathExplanation(target: member, observer: resolvedObserver)
+        return "\(member.name) is \(relation) to \(resolvedObserver.name). \(path) Rule used: \(rule)"
+    }
+}
+
+private enum RelationshipRulesGuide {
+    private static let fallbackMarkdown = """
+    # Relationship Rules
+
+    ## Family ID Convention
+
+    - A single base family ID such as `A` can be the root person.
+    - A spouse is represented by adding `0` to the partner's family ID.
+    - Children extend the parent's base family ID by one branch character.
+    - Siblings usually share the same parent base and have IDs at the same depth.
+    - Older and younger labels are inferred from birth date when available, otherwise by branch order.
+    - Relationship answers are from the current logged-in user's point of view unless the question explicitly asks otherwise.
+
+    ## Relationship Labels
+
+    ### Self
+    Use when the target is the current user. Say that this is the user's own profile.
+    """
+
+    static func rule(for relation: String) -> String {
+        let normalizedRelation = normalizeHeading(relation)
+        guard let section = relationshipSections()[normalizedRelation] else {
+            return "The app compares family IDs, spouse suffixes, gender, and generation distance using RelationshipRules.md."
+        }
+        return section
+    }
+
+    static func pathExplanation(target: Member, observer: Member) -> String {
+        let targetBase = baseFamilyId(target.familyId)
+        let observerBase = baseFamilyId(observer.familyId)
+        let targetSpouseNote = target.familyId.hasSuffix("0") ? " \(target.name) is stored as a spouse profile." : ""
+        let observerSpouseNote = observer.familyId.hasSuffix("0") ? " Your profile is stored as a spouse profile." : ""
+
+        if targetBase == observerBase {
+            return "Both profiles share base family ID \(targetBase), so this is a spouse/same-household relation.\(targetSpouseNote)\(observerSpouseNote)"
+        }
+
+        let targetDepth = generationDepth(targetBase)
+        let observerDepth = generationDepth(observerBase)
+        let diff = observerDepth - targetDepth
+        let direction: String
+        if diff > 0 {
+            direction = "\(target.name) is \(diff) generation\(diff == 1 ? "" : "s") above \(observer.name)."
+        } else if diff < 0 {
+            let distance = abs(diff)
+            direction = "\(target.name) is \(distance) generation\(distance == 1 ? "" : "s") below \(observer.name)."
+        } else {
+            direction = "\(target.name) and \(observer.name) are in the same generation."
+        }
+
+        let shared = sharedPrefixDescription(targetBase: targetBase, observerBase: observerBase)
+        return "\(direction) \(shared)\(targetSpouseNote)\(observerSpouseNote)"
+    }
+
+    private static func relationshipSections() -> [String: String] {
+        parseSections(from: markdown)
+    }
+
+    private static var markdown: String {
+        if let url = Bundle.main.url(forResource: "RelationshipRules", withExtension: "md"),
+           let contents = try? String(contentsOf: url, encoding: .utf8) {
+            return contents
+        }
+        return fallbackMarkdown
+    }
+
+    private static func parseSections(from markdown: String) -> [String: String] {
+        var sections: [String: String] = [:]
+        var currentHeading: String?
+        var lines: [String] = []
+
+        func flush() {
+            guard let currentHeading else { return }
+            let body = lines
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            if !body.isEmpty {
+                sections[normalizeHeading(currentHeading)] = body
+            }
+        }
+
+        for line in markdown.components(separatedBy: .newlines) {
+            if line.hasPrefix("### ") {
+                flush()
+                currentHeading = String(line.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+                lines = []
+            } else if currentHeading != nil {
+                lines.append(line)
+            }
+        }
+        flush()
+        return sections
+    }
+
+    private static func normalizeHeading(_ value: String) -> String {
+        value.lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func baseFamilyId(_ familyId: String) -> String {
+        let normalizedId = familyId.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        return normalizedId.hasSuffix("0") ? String(normalizedId.dropLast()) : normalizedId
+    }
+
+    private static func generationDepth(_ baseId: String) -> Int {
+        if baseId.isEmpty { return 0 }
+        return max(0, baseId.count - 1)
+    }
+
+    private static func sharedPrefixDescription(targetBase: String, observerBase: String) -> String {
+        guard !targetBase.isEmpty, !observerBase.isEmpty else {
+            return "One of the profiles is missing a family ID, so the explanation may be incomplete."
+        }
+
+        let shared = String(zip(targetBase, observerBase).prefix { $0 == $1 }.map(\.0))
+        if shared.isEmpty {
+            return "Their family IDs are on different top-level branches."
+        }
+        if targetBase.hasPrefix(observerBase) {
+            return "The target branch starts from your branch (\(observerBase) -> \(targetBase))."
+        }
+        if observerBase.hasPrefix(targetBase) {
+            return "Your branch starts from the target branch (\(targetBase) -> \(observerBase))."
+        }
+        return "They share branch prefix \(shared), then split into separate family branches."
+    }
+}
+
+private enum AssistantDirectoryQuery {
+    static func answer(question: String, members: [Member], matchedMembers: [Member]) -> String? {
+        if let year = birthYearQuestion(in: question) {
+            return answerBirthYearQuery(question: question, year: year, members: members)
+        }
+
+        if isProfileMatchListQuestion(question), !matchedMembers.isEmpty {
+            return answerProfileMatchQuery(matches: matchedMembers)
+        }
+
+        if isGeneralDirectoryHelpQuestion(question) {
+            return "\(rule(for: "Profile Count Queries")) Examples: “how many people born in 1985?”, “who was born in 1985?”, “find people in Indore”, or “show profile for Amit”."
+        }
+
+        return nil
+    }
+
+    static func memberChoiceLine(_ member: Member) -> String {
+        let birthday = shortDisplayDate(member.dateOfBirth) ?? "DOB not saved"
+        let relation = clean(member.relationship) ?? "relationship not set"
+        let location = clean(member.location).map { " - \($0)" } ?? ""
+        return "\(member.name) (\(member.familyId)) - \(birthday) - \(relation)\(location)"
+    }
+
+    private static func answerBirthYearQuery(question: String, year: Int, members: [Member]) -> String {
+        let matches = members
+            .filter { birthYear($0) == year }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        let guidance = rule(for: "Birth Year Queries")
+        guard !matches.isEmpty else {
+            return "No saved profiles match birth year \(year). \(guidance)"
+        }
+
+        let lines = matches.prefix(12).map { "- \(memberChoiceLine($0))" }.joined(separator: "\n")
+        let more = matches.count > 12 ? "\n…and \(matches.count - 12) more." : ""
+
+        if isCountQuestion(question) {
+            let sample = matches.prefix(6).map(\.name).joined(separator: ", ")
+            return "\(matches.count) people were born in \(year). Sample: \(sample). \(guidance)"
+        }
+
+        return "\(matches.count) people were born in \(year):\n\(lines)\(more)\n\(guidance)"
+    }
+
+    private static func answerProfileMatchQuery(matches: [Member]) -> String {
+        let sorted = matches.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        let lines = sorted.prefix(10).map { "- \(memberChoiceLine($0))" }.joined(separator: "\n")
+        let more = sorted.count > 10 ? "\n…and \(sorted.count - 10) more." : ""
+        return "Profile matches from cached member data:\n\(lines)\(more)\n\(rule(for: "Name and Profile Matching"))"
+    }
+
+    private static func birthYearQuestion(in question: String) -> Int? {
+        guard ["born", "birth", "birthday", "dob", "janam", "जन्म"].contains(where: { question.contains($0) }) else {
+            return nil
+        }
+        return years(in: question).first
+    }
+
+    private static func years(in question: String) -> [Int] {
+        question
+            .components(separatedBy: CharacterSet.decimalDigits.inverted)
+            .compactMap { Int($0) }
+            .filter { (1900...Calendar.current.component(.year, from: .now)).contains($0) }
+    }
+
+    private static func birthYear(_ member: Member) -> Int? {
+        guard let date = member.birthDateValue else { return nil }
+        return Calendar.current.component(.year, from: date)
+    }
+
+    private static func isCountQuestion(_ question: String) -> Bool {
+        ["how many", "count", "number of", "kitne", "kitni"].contains { question.contains($0) }
+    }
+
+    private static func isProfileMatchListQuestion(_ question: String) -> Bool {
+        ["find", "search", "match", "matches", "list", "show profiles", "profile matches"].contains { question.contains($0) }
+    }
+
+    private static func isGeneralDirectoryHelpQuestion(_ question: String) -> Bool {
+        ["what can you answer", "what questions", "query examples", "guidelines"].contains { question.contains($0) }
+    }
+
+    private static func rule(for heading: String) -> String {
+        AssistantMarkdownGuide.section(named: heading, resource: "AssistantQueryGuidelines")
+            ?? "Using AssistantQueryGuidelines.md, the assistant answers from cached profile data and does not invent missing fields."
+    }
+
+    private static func clean(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private enum AssistantMarkdownGuide {
+    static func section(named heading: String, resource: String) -> String? {
+        guard let url = Bundle.main.url(forResource: resource, withExtension: "md"),
+              let markdown = try? String(contentsOf: url, encoding: .utf8) else {
+            return nil
+        }
+        return sections(in: markdown)[normalize(heading)]
+    }
+
+    private static func sections(in markdown: String) -> [String: String] {
+        var sections: [String: String] = [:]
+        var currentHeading: String?
+        var lines: [String] = []
+
+        func flush() {
+            guard let currentHeading else { return }
+            let body = lines
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            if !body.isEmpty {
+                sections[normalize(currentHeading)] = body
+            }
+        }
+
+        for line in markdown.components(separatedBy: .newlines) {
+            if line.hasPrefix("## ") {
+                flush()
+                currentHeading = String(line.dropFirst(3)).trimmingCharacters(in: .whitespacesAndNewlines)
+                lines = []
+            } else if currentHeading != nil {
+                lines.append(line)
+            }
+        }
+        flush()
+        return sections
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.lowercased()
+            .replacingOccurrences(of: " ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
@@ -5071,6 +6006,11 @@ private struct AssistantMemberMatch {
 private struct AssistantConversationContext {
     var lastMatches: [AssistantMemberMatch] = []
     var pendingMatches: [AssistantMemberMatch] = []
+
+    mutating func reset() {
+        lastMatches = []
+        pendingMatches = []
+    }
 
     mutating func remember(_ matches: [AssistantMemberMatch]) {
         lastMatches = matches
@@ -5111,14 +6051,18 @@ private let assistantIgnoredQuestionWords: Set<String> = [
     "his", "her", "their", "he", "she", "they", "them", "that", "this", "same", "person", "one",
     "profile", "profiles", "member", "members", "about", "details", "detail", "info", "information",
     "location", "city", "where", "live", "lives", "living", "from", "relation", "relationship",
-    "phone", "mobile", "number", "contact", "family", "id", "age", "old"
+    "phone", "mobile", "number", "contact", "family", "id", "age", "old", "born", "year", "years",
+    "people", "find", "search", "match", "matches", "list"
 ]
 
 private let assistantIgnoredRelationshipWords: Set<String> = [
     "bhai", "bhaiya", "bhaiyaa", "dada", "dadaji", "dadi", "dadiji", "didi", "behan", "bhabhi",
     "jijaji", "kaka", "kakaji", "kaki", "chacha", "chachaji", "chachi", "mama", "mamaji", "mami",
     "mausa", "mausaji", "mausi", "bua", "fufa", "fufaji", "papa", "mummy", "beta", "beti",
-    "uncle", "aunty", "ji", "sir"
+    "uncle", "aunty", "ji", "sir", "badi", "bade", "choti", "chote", "chota", "bada",
+    "nanad", "saala", "saali", "sasur", "sasurji", "saas", "saasuma", "devar", "jeth",
+    "pota", "poti", "nati", "natin", "bahu", "damad", "damand", "bhatija", "bhatiji",
+    "bhanja", "bhanji"
 ]
 
 private func searchableAssistantWords(_ text: String) -> [String] {
@@ -5149,12 +6093,71 @@ private func isPhoneQuestion(_ question: String) -> Bool {
 }
 
 private func isRelationshipQuestion(_ question: String) -> Bool {
-    ["relation", "relationship", "rishta", "kaun"].contains { question.contains($0) }
+    let directRelationshipPhrases = [
+        "relation", "relationship", "related", "rishta", "rishte", "kaun",
+        "who is", "who's", "to me", "mere kya", "meri kya", "mera kya",
+        "how is", "how are"
+    ]
+    if directRelationshipPhrases.contains(where: { question.contains($0) }) {
+        return true
+    }
+
+    let normalized = " \(question.lowercased()) "
+    guard normalized.contains(" my ") || normalized.contains(" meri ") || normalized.contains(" mere ") else {
+        return false
+    }
+    return assistantIgnoredRelationshipWords.contains { word in
+        normalized.contains(" \(word) ")
+    }
+}
+
+private func isAssistantGreeting(_ question: String) -> Bool {
+    let normalized = question
+        .lowercased()
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .trimmingCharacters(in: CharacterSet(charactersIn: ".!,?"))
+    return [
+        "hi", "hii", "hiii", "hello", "hey", "namaste", "namaskar", "good morning",
+        "good afternoon", "good evening", "नमस्ते", "नमस्कार"
+    ].contains(normalized)
+}
+
+private func isSelfReferenceQuestion(_ question: String) -> Bool {
+    let normalized = " \(question.lowercased()) "
+    return [
+        "who am i",
+        "who i am",
+        "about me",
+        "my profile",
+        "my details",
+        "my info",
+        "my information",
+        "my birthday",
+        "my bday",
+        "my dob",
+        "my anniversary",
+        "my phone",
+        "my mobile",
+        "my number",
+        "my contact",
+        "my location",
+        "my city",
+        "where do i live",
+        "where am i",
+        "my relationship",
+        "mera",
+        "meri",
+        "mujhe",
+        "main kaun"
+    ].contains { normalized.contains($0) }
 }
 
 private func isAssistantFollowUpQuestion(_ question: String) -> Bool {
     let words = searchableAssistantWords(question)
-    if words.isEmpty { return true }
+    if words.isEmpty {
+        return isAssistantContextReuseQuestion(question)
+    }
+    guard isAssistantContextReuseQuestion(question) else { return false }
     return [
         "his", "her", "their", "he", "she", "they", "them", "same", "that person", "this person",
         "what about", "and ", "also", "where", "location", "birthday", "anniversary", "relation",
@@ -5162,14 +6165,53 @@ private func isAssistantFollowUpQuestion(_ question: String) -> Bool {
     ].contains { question.contains($0) }
 }
 
+private func isAssistantContextReuseQuestion(_ question: String) -> Bool {
+    [
+        "his", "her", "their", "he", "she", "they", "them", "same", "that person", "this person",
+        "what about", "and ", "also", "where", "location", "birthday", "anniversary", "relation",
+        "relationship", "phone", "contact", "number", "city", "age", "details", "profile"
+    ].contains { question.contains($0) }
+}
+
 private func findMemberMatches(question: String, members: [Member]) -> [AssistantMemberMatch] {
     let queryWords = searchableAssistantWords(question)
     guard !queryWords.isEmpty else { return [] }
     let joinedQuery = queryWords.joined(separator: " ")
+    let familyIdTokens = assistantFamilyIdTokens(in: question)
+    if !familyIdTokens.isEmpty {
+        let exactFamilyIdMatches = members.filter { member in
+            familyIdTokens.contains(normalizedAssistantFamilyId(member.familyId))
+        }
+        if !exactFamilyIdMatches.isEmpty {
+            let nameFilteredMatches = exactFamilyIdMatches.filter { member in
+                let nameWords = searchableAssistantWords(member.name)
+                return queryWords.contains { query in
+                    nameWords.contains(query) || nameWords.contains { $0.hasPrefix(query) }
+                }
+            }
+            let preferredMatches = nameFilteredMatches.isEmpty ? exactFamilyIdMatches : nameFilteredMatches
+            return preferredMatches
+                .sorted { lhs, rhs in
+                    lhs.familyId.localizedStandardCompare(rhs.familyId) == .orderedAscending
+                }
+                .map { AssistantMemberMatch(member: $0, score: 240, isFuzzy: false) }
+        }
+    }
 
     let matches = members.compactMap { member -> AssistantMemberMatch? in
         let nameWords = searchableAssistantWords(member.name)
-        let candidateWords = nameWords + searchableAssistantWords(member.familyId)
+        let contextWords = [
+            member.familyId,
+            member.spouseName,
+            member.fatherName,
+            member.motherName,
+            member.relationship,
+            member.location,
+            member.address
+        ]
+        .compactMap { $0 }
+        .flatMap(searchableAssistantWords)
+        let candidateWords = nameWords + contextWords
         let searchableName = nameWords.joined(separator: " ")
         let searchableCandidate = candidateWords.joined(separator: " ")
         guard !candidateWords.isEmpty else { return nil }
@@ -5218,6 +6260,39 @@ private func findMemberMatches(question: String, members: [Member]) -> [Assistan
 
     guard let bestScore = matches.first?.score else { return [] }
     return Array(matches.filter { $0.score >= bestScore - 12 && $0.score >= 42 }.prefix(5))
+}
+
+private func assistantFamilyIdTokens(in question: String) -> Set<String> {
+    let rawTokens = question
+        .uppercased()
+        .components(separatedBy: CharacterSet.alphanumerics.inverted)
+        .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        .filter { !$0.isEmpty }
+
+    let compactQuestion = rawTokens.joined(separator: " ")
+    var tokens = Set(rawTokens.filter { token in
+        token.range(of: #"^[A-Z]{1,3}[0-9A-Z]{1,8}$"#, options: .regularExpression) != nil
+            && token.rangeOfCharacter(from: .decimalDigits) != nil
+    })
+
+    for pair in zip(rawTokens, rawTokens.dropFirst()) {
+        if pair.0 == "ID" || pair.0 == "FAMILYID" {
+            tokens.insert(pair.1)
+        }
+    }
+
+    if let range = compactQuestion.range(of: #"FAMILY\s+ID\s+([A-Z0-9]+)"#, options: .regularExpression) {
+        let match = String(compactQuestion[range])
+        if let id = match.components(separatedBy: .whitespaces).last {
+            tokens.insert(id)
+        }
+    }
+
+    return Set(tokens.map(normalizedAssistantFamilyId).filter { !$0.isEmpty })
+}
+
+private func normalizedAssistantFamilyId(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
 }
 
 private func fuzzyWordScore(query: String, candidate: String) -> Int {
@@ -5276,7 +6351,7 @@ private struct AssistantBubble: View {
                 .foregroundStyle(message.isUser ? .white : .primary)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
-                .background(message.isUser ? AndroidLook.softBrown : Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background(message.isUser ? AndroidLook.softBrown : Color.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             if !message.isUser { Spacer(minLength: 40) }
         }
     }
@@ -5292,11 +6367,17 @@ private struct AICardGeneratorScreen: View {
     @State private var fromLabel = "With love from"
     @State private var sender = "Purawale - Hum aur Humare"
     @State private var closingLine: String
+    @State private var selectedMode: StationeryMode = .card
     @State private var selectedStyle = 0
     @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedCollageItems: [PhotosPickerItem] = []
     @State private var selectedImageData: Data?
+    @State private var selectedCollagePhotos: [Data] = []
     @State private var photoAdjustments = CardPhotoAdjustments()
     @State private var textSettings = CardTextSettings()
+    @State private var aiDirection = "Warm family wishes, elegant Indian stationery details, keepsake style"
+    @State private var exportURL: URL?
+    @State private var exportStatus: String?
     @State private var isPhotoEditorExpanded = false
     @State private var isTextStyleExpanded = false
 
@@ -5350,6 +6431,56 @@ private struct AICardGeneratorScreen: View {
             accent: Color(red: 0.75, green: 0.54, blue: 0.10),
             photoBorder: Color(red: 0.75, green: 0.54, blue: 0.10),
             plate: Color(red: 1.0, green: 0.88, blue: 0.91).opacity(0.86)
+        ),
+        GreetingCardStyle(
+            name: "Blush Rose",
+            assetName: "AICardFrameRose",
+            background: Color(red: 1.0, green: 0.87, blue: 0.91),
+            primary: Color(red: 0.51, green: 0.08, blue: 0.19),
+            secondary: Color(red: 0.28, green: 0.10, blue: 0.14),
+            accent: Color(red: 0.78, green: 0.44, blue: 0.48),
+            photoBorder: Color(red: 0.78, green: 0.44, blue: 0.48),
+            plate: Color(red: 1.0, green: 0.88, blue: 0.91).opacity(0.86)
+        ),
+        GreetingCardStyle(
+            name: "Burgundy Emerald",
+            assetName: "AICardFrameEmeraldLamp",
+            background: Color(red: 0.03, green: 0.27, blue: 0.22),
+            primary: Color(red: 0.97, green: 0.86, blue: 0.57),
+            secondary: Color(red: 1.0, green: 0.96, blue: 0.82),
+            accent: Color(red: 0.90, green: 0.57, blue: 0.16),
+            photoBorder: Color(red: 0.90, green: 0.57, blue: 0.16),
+            plate: Color(red: 0.02, green: 0.18, blue: 0.15).opacity(0.70)
+        ),
+        GreetingCardStyle(
+            name: "Navy Peacock",
+            assetName: "AICardFramePeacockFireworks",
+            background: Color(red: 0.05, green: 0.17, blue: 0.31),
+            primary: Color(red: 0.35, green: 0.82, blue: 0.79),
+            secondary: Color(red: 1.0, green: 0.94, blue: 0.78),
+            accent: Color(red: 1.0, green: 0.73, blue: 0.30),
+            photoBorder: Color(red: 1.0, green: 0.73, blue: 0.30),
+            plate: Color(red: 0.02, green: 0.10, blue: 0.20).opacity(0.72)
+        ),
+        GreetingCardStyle(
+            name: "Ivory Marigold",
+            assetName: "AICardFrameMarigold",
+            background: Color(red: 1.0, green: 0.96, blue: 0.86),
+            primary: Color(red: 0.50, green: 0.23, blue: 0.07),
+            secondary: Color(red: 0.28, green: 0.13, blue: 0.06),
+            accent: Color(red: 0.92, green: 0.53, blue: 0.11),
+            photoBorder: Color(red: 0.92, green: 0.53, blue: 0.11),
+            plate: Color.white.opacity(0.78)
+        ),
+        GreetingCardStyle(
+            name: "Blush Lavender",
+            assetName: "AICardFrameLavender",
+            background: Color(red: 0.94, green: 0.90, blue: 1.0),
+            primary: Color(red: 0.33, green: 0.20, blue: 0.52),
+            secondary: Color(red: 0.21, green: 0.15, blue: 0.32),
+            accent: Color(red: 0.77, green: 0.52, blue: 0.85),
+            photoBorder: Color(red: 0.77, green: 0.52, blue: 0.85),
+            plate: Color.white.opacity(0.80)
         )
     ]
 
@@ -5358,7 +6489,8 @@ private struct AICardGeneratorScreen: View {
             NavigationStack {
                 ScrollView {
                     VStack(spacing: 20) {
-                        GreetingCardPreview(
+                        StationeryPreview(
+                            mode: selectedMode,
                             member: member,
                             headline: headline,
                             nameLine: nameLine,
@@ -5369,15 +6501,38 @@ private struct AICardGeneratorScreen: View {
                             eventType: eventType,
                             style: styles[selectedStyle],
                             customImageData: selectedImageData,
+                            collagePhotos: selectedCollagePhotos,
                             photoAdjustments: photoAdjustments,
-                            textSettings: textSettings
+                            textSettings: textSettings,
+                            aiDirection: aiDirection
                         )
                         .frame(maxWidth: 360)
-                        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                        .aspectRatio(selectedMode.aspectRatio, contentMode: .fit)
                         .padding(.top, 12)
 
                         VStack(alignment: .leading, spacing: 14) {
-                            GroupBox("Frame") {
+                            GroupBox("Stationary type") {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    ScrollView(.horizontal, showsIndicators: false) {
+                                        HStack(spacing: 10) {
+                                            ForEach(StationeryMode.allCases) { mode in
+                                                StationeryModeChoice(
+                                                    mode: mode,
+                                                    selected: selectedMode == mode,
+                                                    action: { selectedMode = mode }
+                                                )
+                                            }
+                                        }
+                                        .padding(.vertical, 2)
+                                    }
+
+                                    TextField("AI style direction", text: $aiDirection, axis: .vertical)
+                                        .textFieldStyle(.roundedBorder)
+                                        .lineLimit(2...3)
+                                }
+                            }
+
+                            GroupBox("Style") {
                                 VStack(alignment: .leading, spacing: 12) {
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 12) {
@@ -5391,7 +6546,7 @@ private struct AICardGeneratorScreen: View {
                                         }
                                         .padding(.vertical, 2)
                                     }
-                                    Picker("Frame", selection: $selectedStyle) {
+                                    Picker("Style", selection: $selectedStyle) {
                                         ForEach(styles.indices, id: \.self) { index in
                                             Text(styles[index].name).tag(index)
                                         }
@@ -5405,8 +6560,17 @@ private struct AICardGeneratorScreen: View {
                                     PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                                         AndroidIconActionButtonLabel(
                                             title: selectedImageData == nil ? "Add photo" : "Change photo",
-                                            subtitle: "Card portrait",
+                                            subtitle: selectedMode == .card ? "Card portrait" : "Main photo",
                                             systemImage: "photo.on.rectangle.angled"
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+
+                                    PhotosPicker(selection: $selectedCollageItems, maxSelectionCount: 12, matching: .images) {
+                                        AndroidIconActionButtonLabel(
+                                            title: selectedCollagePhotos.isEmpty ? "Add many photos" : "\(selectedCollagePhotos.count) photos selected",
+                                            subtitle: "Collage, GIF + memory versions",
+                                            systemImage: "rectangle.stack.badge.person.crop"
                                         )
                                     }
                                     .buttonStyle(.plain)
@@ -5454,11 +6618,39 @@ private struct AICardGeneratorScreen: View {
                             } label: {
                                 AndroidIconActionButtonLabel(
                                     title: "Regenerate",
-                                    subtitle: "Message",
+                                    subtitle: selectedMode.regenerateSubtitle,
                                     systemImage: "sparkles"
                                 )
                             }
                             .buttonStyle(.plain)
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                Button {
+                                    exportStationery()
+                                } label: {
+                                    AndroidIconActionButtonLabel(
+                                        title: "Download photo",
+                                        subtitle: "PNG of this design",
+                                        systemImage: "square.and.arrow.down"
+                                    )
+                                }
+                                .buttonStyle(.plain)
+
+                                if let exportURL {
+                                    ShareLink(item: exportURL) {
+                                        Label("Share / Save downloaded photo", systemImage: "square.and.arrow.up")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(AndroidLook.accentGold)
+                                }
+
+                                if let exportStatus {
+                                    Text(exportStatus)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                         }
                         .padding(14)
                         .background(Color(red: 0.98, green: 0.94, blue: 0.86).opacity(0.96), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -5475,9 +6667,20 @@ private struct AICardGeneratorScreen: View {
                     if let data = try? await selectedPhotoItem.loadTransferable(type: Data.self) {
                         selectedImageData = data
                         photoAdjustments = CardPhotoAdjustments()
+                        exportURL = nil
                     }
                 }
-                .navigationTitle(localized("AI Card Generator", language: viewModel.language))
+                .task(id: selectedCollageItems) {
+                    var loadedPhotos: [Data] = []
+                    for item in selectedCollageItems {
+                        if let data = try? await item.loadTransferable(type: Data.self) {
+                            loadedPhotos.append(data)
+                        }
+                    }
+                    selectedCollagePhotos = loadedPhotos
+                    exportURL = nil
+                }
+                .navigationTitle(localized("AI Stationary Generator", language: viewModel.language))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
@@ -5491,12 +6694,50 @@ private struct AICardGeneratorScreen: View {
     }
 
     private func regenerate() {
-        let options = [
-            Self.defaultMessage(for: member, eventType: eventType),
-            "May this day bring warmth, laughter, blessings, and memories your whole family will keep close.",
-            "With love from all of us, wishing you a day filled with joy, grace, and togetherness."
-        ]
+        let options = selectedMode.messageOptions(defaultMessage: Self.defaultMessage(for: member, eventType: eventType))
         message = options.randomElement() ?? message
+        exportURL = nil
+    }
+
+    @MainActor
+    private func exportStationery() {
+        let width = 900.0
+        let content = StationeryPreview(
+            mode: selectedMode,
+            member: member,
+            headline: headline,
+            nameLine: nameLine,
+            message: message,
+            fromLabel: fromLabel,
+            sender: sender,
+            closingLine: closingLine,
+            eventType: eventType,
+            style: styles[selectedStyle],
+            customImageData: selectedImageData,
+            collagePhotos: selectedCollagePhotos,
+            photoAdjustments: photoAdjustments,
+            textSettings: textSettings,
+            aiDirection: aiDirection
+        )
+        .frame(width: width, height: width / selectedMode.aspectRatio)
+
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2
+
+        guard let image = renderer.uiImage, let data = image.pngData() else {
+            exportStatus = "Could not render this stationary photo."
+            return
+        }
+
+        let filename = "circlebirthdays-\(selectedMode.exportName)-\(Int(Date().timeIntervalSince1970)).png"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        do {
+            try data.write(to: url, options: .atomic)
+            exportURL = url
+            exportStatus = "Downloaded photo is ready to share or save."
+        } catch {
+            exportStatus = "Could not save the downloaded photo."
+        }
     }
 
     private static func defaultNameLine(for member: Member, eventType: DashboardFamilyEvent.EventType, members: [Member]) -> String {
@@ -5534,6 +6775,101 @@ private struct GreetingCardStyle {
     let plate: Color
 }
 
+private enum StationeryMode: String, CaseIterable, Identifiable {
+    case card
+    case sticker
+    case gif
+    case collage
+    case vintage
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .card: return "Card"
+        case .sticker: return "Wish Sticker"
+        case .gif: return "GIF"
+        case .collage: return "Collage"
+        case .vintage: return "Vintage Memory"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .card: return "Classic photo wish"
+        case .sticker: return "Cutout-style wish"
+        case .gif: return "Animated idea board"
+        case .collage: return "Many-photo layout"
+        case .vintage: return "Classic memory photo"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .card: return "rectangle.portrait"
+        case .sticker: return "seal.fill"
+        case .gif: return "play.rectangle.fill"
+        case .collage: return "rectangle.grid.2x2.fill"
+        case .vintage: return "camera.filters"
+        }
+    }
+
+    var aspectRatio: CGFloat {
+        switch self {
+        case .card, .vintage: return 2.0 / 3.0
+        case .sticker: return 1.0
+        case .gif, .collage: return 4.0 / 5.0
+        }
+    }
+
+    var exportName: String { rawValue.replacingOccurrences(of: " ", with: "-") }
+
+    var regenerateSubtitle: String {
+        switch self {
+        case .card: return "Message"
+        case .sticker: return "Sticker wish"
+        case .gif: return "GIF frames"
+        case .collage: return "Collage caption"
+        case .vintage: return "Memory caption"
+        }
+    }
+
+    func messageOptions(defaultMessage: String) -> [String] {
+        switch self {
+        case .card:
+            return [
+                defaultMessage,
+                "May this day bring warmth, laughter, blessings, and memories your whole family will keep close.",
+                "With love from all of us, wishing you a day filled with joy, grace, and togetherness."
+            ]
+        case .sticker:
+            return [
+                "Blessings, smiles, and love always.",
+                "Made with love for your special day.",
+                "A little family sparkle, just for you."
+            ]
+        case .gif:
+            return [
+                "Frame 1: warm smile. Frame 2: flowers bloom. Frame 3: wishes sparkle.",
+                "A tiny animated wish with photos, lamps, and family love.",
+                "Photo pop-in, golden text glow, celebration burst."
+            ]
+        case .collage:
+            return [
+                "A collection of little moments that became our favorite memories.",
+                "Many photos, one family story, all our love.",
+                "Faces, laughter, blessings, and the years we keep close."
+            ]
+        case .vintage:
+            return [
+                "A classic memory, softened with time and held with love.",
+                "Old-photo warmth for a story the family never forgets.",
+                "A keepsake memory with gentle grain, soft light, and love."
+            ]
+        }
+    }
+}
+
 private struct CardPhotoAdjustments: Equatable {
     var scale: Double = 1.0
     var offsetX: Double = 0.0
@@ -5548,6 +6884,146 @@ private struct CardTextSettings: Equatable {
     var fontIndex = 0
     var sizeScale: Double = 1.0
     var colorIndex = 0
+}
+
+private func cardStudioFont(size: CGFloat, weight: Font.Weight, settings: CardTextSettings) -> Font {
+    let scaledSize = size * min(max(settings.sizeScale, 0.85), 1.25)
+    switch settings.fontIndex {
+    case 0:
+        return .system(size: scaledSize, weight: weight, design: .serif)
+    case 1:
+        return .system(size: scaledSize, weight: weight, design: .rounded)
+    case 2:
+        return .system(size: scaledSize, weight: weight, design: .default)
+    case 3:
+        return .system(size: scaledSize, weight: weight, design: .monospaced)
+    case 4:
+        return .custom("Avenir Next", size: scaledSize).weight(weight)
+    case 5:
+        return .custom("Georgia", size: scaledSize).weight(weight)
+    default:
+        return .system(size: scaledSize, weight: weight, design: .serif)
+    }
+}
+
+private func cardStudioTextColor(style: GreetingCardStyle, settings: CardTextSettings) -> Color {
+    let options = cardTextColorOptions(for: style)
+    return options[min(max(settings.colorIndex, 0), options.count - 1)].color
+}
+
+private struct StationeryPreview: View {
+    let mode: StationeryMode
+    let member: Member
+    let headline: String
+    let nameLine: String
+    let message: String
+    let fromLabel: String
+    let sender: String
+    let closingLine: String
+    let eventType: DashboardFamilyEvent.EventType
+    let style: GreetingCardStyle
+    let customImageData: Data?
+    let collagePhotos: [Data]
+    let photoAdjustments: CardPhotoAdjustments
+    let textSettings: CardTextSettings
+    let aiDirection: String
+
+    var body: some View {
+        switch mode {
+        case .card:
+            GreetingCardPreview(
+                member: member,
+                headline: headline,
+                nameLine: nameLine,
+                message: message,
+                fromLabel: fromLabel,
+                sender: sender,
+                closingLine: closingLine,
+                eventType: eventType,
+                style: style,
+                customImageData: customImageData,
+                photoAdjustments: photoAdjustments,
+                textSettings: textSettings
+            )
+        case .sticker:
+            WishStickerPreview(
+                member: member,
+                headline: headline,
+                nameLine: nameLine,
+                message: message,
+                style: style,
+                customImageData: customImageData,
+                photoAdjustments: photoAdjustments,
+                textSettings: textSettings
+            )
+        case .gif:
+            GifStoryboardPreview(
+                headline: headline,
+                nameLine: nameLine,
+                message: message,
+                style: style,
+                customImageData: customImageData,
+                collagePhotos: collagePhotos,
+                aiDirection: aiDirection,
+                textSettings: textSettings
+            )
+        case .collage:
+            PhotoCollagePreview(
+                headline: headline,
+                nameLine: nameLine,
+                message: message,
+                style: style,
+                customImageData: customImageData,
+                collagePhotos: collagePhotos,
+                textSettings: textSettings
+            )
+        case .vintage:
+            VintageMemoryPreview(
+                member: member,
+                headline: headline,
+                nameLine: nameLine,
+                message: message,
+                style: style,
+                customImageData: customImageData,
+                collagePhotos: collagePhotos,
+                photoAdjustments: photoAdjustments,
+                textSettings: textSettings
+            )
+        }
+    }
+}
+
+private struct StationeryModeChoice: View {
+    let mode: StationeryMode
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Image(systemName: mode.systemImage)
+                        .font(.headline.weight(.semibold))
+                    Text(mode.title)
+                        .font(.caption.weight(.heavy))
+                }
+                Text(mode.subtitle)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            .foregroundStyle(selected ? AndroidLook.deepBrown : .primary)
+            .padding(10)
+            .frame(width: 132, alignment: .leading)
+            .frame(minHeight: 74)
+            .background(selected ? AndroidLook.accentGold.opacity(0.22) : Color.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(selected ? AndroidLook.accentGold : Color.secondary.opacity(0.25), lineWidth: selected ? 2 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 private struct GreetingCardPreview: View {
@@ -5586,24 +7062,8 @@ private struct GreetingCardPreview: View {
         }
     }
 
-    private var editableFont: Font.Design {
-        switch textSettings.fontIndex {
-        case 0:
-            return .serif
-        case 1:
-            return .rounded
-        default:
-            return .default
-        }
-    }
-
     private var editableColor: Color {
-        let options = cardTextColorOptions(for: style)
-        return options[min(max(textSettings.colorIndex, 0), options.count - 1)].color
-    }
-
-    private var editableScale: Double {
-        min(max(textSettings.sizeScale, 0.85), 1.2)
+        cardStudioTextColor(style: style, settings: textSettings)
     }
 
     var body: some View {
@@ -5615,8 +7075,8 @@ private struct GreetingCardPreview: View {
 
             VStack(spacing: 7) {
                 Text(headline)
-                    .font(.system(size: 25, weight: .semibold, design: .serif))
-                    .foregroundStyle(style.primary)
+                    .font(cardStudioFont(size: 25, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(editableColor)
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
@@ -5639,8 +7099,8 @@ private struct GreetingCardPreview: View {
                 }
 
                 Text(eventLabel)
-                    .font(.system(size: 35, weight: .semibold, design: .serif))
-                    .foregroundStyle(style.primary)
+                    .font(cardStudioFont(size: 35, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(editableColor)
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -5648,7 +7108,7 @@ private struct GreetingCardPreview: View {
                 AICardOrnamentDivider(style: style)
 
                 Text(nameLine)
-                    .font(.system(size: 27 * editableScale, weight: .semibold, design: editableFont))
+                    .font(cardStudioFont(size: 27, weight: .semibold, settings: textSettings))
                     .foregroundStyle(editableColor)
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
@@ -5674,7 +7134,7 @@ private struct GreetingCardPreview: View {
                     .padding(.vertical, 4)
 
                 Text(message)
-                    .font(.system(size: 16 * editableScale, weight: .semibold, design: editableFont))
+                    .font(cardStudioFont(size: 16, weight: .semibold, settings: textSettings))
                     .foregroundStyle(editableColor)
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
@@ -5687,20 +7147,20 @@ private struct GreetingCardPreview: View {
                 Spacer(minLength: 0)
 
                 Text(fromLabel)
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(style.primary.opacity(0.72))
+                    .font(cardStudioFont(size: 11, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(editableColor.opacity(0.72))
 
                 Text(sender)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(style.primary.opacity(0.88))
+                    .font(cardStudioFont(size: 12, weight: .bold, settings: textSettings))
+                    .foregroundStyle(editableColor.opacity(0.88))
                     .multilineTextAlignment(.center)
                     .lineLimit(1)
                     .minimumScaleFactor(0.72)
 
                 if !closingLine.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     Text(closingLine)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(style.primary.opacity(0.72))
+                        .font(cardStudioFont(size: 11, weight: .semibold, settings: textSettings))
+                        .foregroundStyle(editableColor.opacity(0.72))
                         .multilineTextAlignment(.center)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
@@ -5713,6 +7173,400 @@ private struct GreetingCardPreview: View {
         .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
         .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 10)
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct WishStickerPreview: View {
+    let member: Member
+    let headline: String
+    let nameLine: String
+    let message: String
+    let style: GreetingCardStyle
+    let customImageData: Data?
+    let photoAdjustments: CardPhotoAdjustments
+    let textSettings: CardTextSettings
+
+    private var textColor: Color {
+        cardStudioTextColor(style: style, settings: textSettings)
+    }
+
+    var body: some View {
+        ZStack {
+            style.background
+            stickerAccentBackground
+
+            VStack(spacing: 12) {
+                Text(headline)
+                    .font(cardStudioFont(size: 25, weight: .bold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+
+                CardMemberPhoto(
+                    member: member,
+                    customImageData: customImageData,
+                    adjustments: photoAdjustments,
+                    border: style.photoBorder
+                )
+                .clipShape(Circle())
+                .overlay(Circle().stroke(style.accent, lineWidth: 4))
+                .frame(width: 190, height: 190)
+
+                Text(nameLine)
+                    .font(cardStudioFont(size: 31, weight: .heavy, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.62)
+
+                messagePlate
+            }
+            .padding(34)
+            .padding(34)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 42, style: .continuous))
+        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 8)
+    }
+
+    private var messagePlate: some View {
+        Text(message)
+            .font(cardStudioFont(size: 15, weight: .bold, settings: textSettings))
+            .foregroundStyle(textColor)
+            .multilineTextAlignment(.center)
+            .lineLimit(3)
+            .minimumScaleFactor(0.70)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .background(style.plate.opacity(0.84), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(style.accent.opacity(0.82), lineWidth: 1.5)
+            )
+            .padding(.horizontal, 4)
+    }
+
+    private var stickerAccentBackground: some View {
+        ZStack {
+            Circle()
+                .fill(style.accent.opacity(0.16))
+                .frame(width: 310, height: 310)
+                .offset(x: -118, y: -118)
+            Circle()
+                .fill(style.primary.opacity(0.10))
+                .frame(width: 240, height: 240)
+                .offset(x: 128, y: 118)
+            RoundedRectangle(cornerRadius: 42, style: .continuous)
+                .stroke(style.accent.opacity(0.55), lineWidth: 4)
+                .padding(14)
+        }
+    }
+}
+
+private struct GifStoryboardPreview: View {
+    let headline: String
+    let nameLine: String
+    let message: String
+    let style: GreetingCardStyle
+    let customImageData: Data?
+    let collagePhotos: [Data]
+    let aiDirection: String
+    let textSettings: CardTextSettings
+
+    private var storyboardPhotos: [Data] {
+        var photos = collagePhotos
+        if let customImageData, photos.isEmpty {
+            photos = [customImageData]
+        }
+        return photos
+    }
+
+    private var textColor: Color {
+        cardStudioTextColor(style: style, settings: textSettings)
+    }
+
+    var body: some View {
+        ZStack {
+            style.background
+            gifAccentBackground
+
+            VStack(spacing: 12) {
+                Text("GIF Wish")
+                    .font(cardStudioFont(size: 11, weight: .heavy, settings: textSettings))
+                    .foregroundStyle(style.accent)
+                    .textCase(.uppercase)
+
+                Text(headline)
+                    .font(cardStudioFont(size: 25, weight: .bold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+
+                HStack(spacing: 8) {
+                    ForEach(0..<3, id: \.self) { index in
+                        VStack(spacing: 6) {
+                            StationeryPhotoTile(data: storyboardPhotos.indices.contains(index) ? storyboardPhotos[index] : customImageData)
+                                .frame(height: 122)
+                                .overlay(alignment: .topLeading) {
+                                    Text("\(index + 1)")
+                                        .font(.caption2.weight(.heavy))
+                                        .foregroundStyle(.white)
+                                        .padding(6)
+                                        .background(style.primary.opacity(0.82), in: Circle())
+                                        .padding(6)
+                                }
+                            Text(gifFrameLabel(index))
+                                .font(cardStudioFont(size: 10, weight: .bold, settings: textSettings))
+                                .foregroundStyle(textColor.opacity(0.78))
+                                .lineLimit(1)
+                        }
+                        .padding(6)
+                        .background(style.plate.opacity(0.74), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    }
+                }
+
+                Text(nameLine)
+                    .font(cardStudioFont(size: 24, weight: .heavy, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.68)
+
+                Text(message)
+                    .font(cardStudioFont(size: 14, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.68)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(style.plate.opacity(0.78), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(style.accent.opacity(0.68), lineWidth: 1)
+                    )
+
+                Text(aiDirection)
+                    .font(cardStudioFont(size: 10, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(textColor.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.62)
+                    .padding(.horizontal, 12)
+            }
+            .padding(.horizontal, 40)
+            .padding(.vertical, 38)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 8)
+    }
+
+    private var gifAccentBackground: some View {
+        ZStack {
+            LinearGradient(
+                colors: [style.background, style.accent.opacity(0.20), style.background],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            HStack {
+                Rectangle()
+                    .fill(style.accent.opacity(0.24))
+                    .frame(width: 10)
+                Spacer()
+                Rectangle()
+                    .fill(style.primary.opacity(0.16))
+                    .frame(width: 10)
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+
+    private func gifFrameLabel(_ index: Int) -> String {
+        switch index {
+        case 0: return "Photo"
+        case 1: return "Wish"
+        default: return "Sparkle"
+        }
+    }
+}
+
+private struct PhotoCollagePreview: View {
+    let headline: String
+    let nameLine: String
+    let message: String
+    let style: GreetingCardStyle
+    let customImageData: Data?
+    let collagePhotos: [Data]
+    let textSettings: CardTextSettings
+
+    private var photos: [Data] {
+        var all = collagePhotos
+        if let customImageData, all.isEmpty {
+            all = [customImageData]
+        }
+        return all
+    }
+
+    private var textColor: Color {
+        cardStudioTextColor(style: style, settings: textSettings)
+    }
+
+    var body: some View {
+        ZStack {
+            style.background
+            CardFrameArtwork(style: style)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 12) {
+                Text(headline)
+                    .font(cardStudioFont(size: 24, weight: .bold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2), spacing: 8) {
+                    ForEach(0..<6, id: \.self) { index in
+                        StationeryPhotoTile(data: photos.indices.contains(index) ? photos[index] : nil)
+                            .aspectRatio(index == 0 ? 1.55 : 1.0, contentMode: .fit)
+                            .gridCellColumns(index == 0 ? 2 : 1)
+                    }
+                }
+                .padding(10)
+                .background(style.plate.opacity(0.66), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+                Text(nameLine)
+                    .font(cardStudioFont(size: 24, weight: .heavy, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+
+                Text(message)
+                    .font(cardStudioFont(size: 14, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+                    .minimumScaleFactor(0.68)
+            }
+            .padding(.horizontal, 40)
+            .padding(.vertical, 38)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 8)
+    }
+}
+
+private struct VintageMemoryPreview: View {
+    let member: Member
+    let headline: String
+    let nameLine: String
+    let message: String
+    let style: GreetingCardStyle
+    let customImageData: Data?
+    let collagePhotos: [Data]
+    let photoAdjustments: CardPhotoAdjustments
+    let textSettings: CardTextSettings
+
+    private var featuredPhoto: Data? {
+        customImageData ?? collagePhotos.first
+    }
+
+    private var textColor: Color {
+        cardStudioTextColor(style: style, settings: textSettings)
+    }
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.91, green: 0.82, blue: 0.64)
+            CardFrameArtwork(style: style)
+                .opacity(0.72)
+                .allowsHitTesting(false)
+
+            VStack(spacing: 12) {
+                Text(headline)
+                    .font(cardStudioFont(size: 23, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+
+                CardMemberPhoto(
+                    member: member,
+                    customImageData: featuredPhoto,
+                    adjustments: photoAdjustments,
+                    border: style.photoBorder
+                )
+                .saturation(0.18)
+                .contrast(1.08)
+                .brightness(0.03)
+                .colorMultiply(Color(red: 1.0, green: 0.86, blue: 0.58))
+                .frame(height: 270)
+                .padding(12)
+                .background(Color(red: 0.98, green: 0.92, blue: 0.76), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .rotationEffect(.degrees(-1.4))
+                .shadow(color: .black.opacity(0.20), radius: 8, x: 0, y: 5)
+
+                Text(nameLine)
+                    .font(cardStudioFont(size: 26, weight: .bold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.65)
+
+                Text(message)
+                    .font(cardStudioFont(size: 15, weight: .semibold, settings: textSettings))
+                    .foregroundStyle(textColor)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(4)
+                    .minimumScaleFactor(0.66)
+                    .padding(.horizontal, 20)
+            }
+            .padding(.horizontal, 36)
+            .padding(.vertical, 42)
+
+            VintageGrain()
+                .opacity(0.22)
+                .allowsHitTesting(false)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+        .shadow(color: .black.opacity(0.18), radius: 16, x: 0, y: 10)
+    }
+}
+
+private struct StationeryPhotoTile: View {
+    let data: Data?
+
+    var body: some View {
+        Group {
+            if let data, let uiImage = UIImage(data: data) {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Rectangle()
+                    .fill(Color.white.opacity(0.80))
+                    .overlay {
+                        Image(systemName: "photo")
+                            .font(.title2.weight(.semibold))
+                            .foregroundStyle(AndroidLook.softBrown.opacity(0.65))
+                    }
+            }
+        }
+        .clipped()
+        .background(Color.white, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.72), lineWidth: 2)
+        )
+    }
+}
+
+private struct VintageGrain: View {
+    var body: some View {
+        Canvas { context, size in
+            for index in 0..<140 {
+                let x = CGFloat((index * 47) % 900) / 900 * size.width
+                let y = CGFloat((index * 83) % 1350) / 1350 * size.height
+                let rect = CGRect(x: x, y: y, width: 1.4, height: 1.4)
+                context.fill(Path(ellipseIn: rect), with: .color(.black.opacity(0.24)))
+            }
+        }
     }
 }
 
@@ -5815,15 +7669,12 @@ private struct CardMemberPhoto: View {
                     .resizable()
                     .scaledToFill()
             } else if let url = imageURL(fromStoredPhoto: member.photoURL) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        fallback
-                    }
+                CachedRemoteImage(url: url) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    fallback
                 }
             } else {
                 fallback
@@ -5922,17 +7773,29 @@ private struct TextStyleControls: View {
             Text("Editable text style")
                 .font(.headline)
 
-            HStack(spacing: 8) {
-                ForEach(Array(["Serif", "Rounded", "Classic"].enumerated()), id: \.offset) { index, label in
-                    Button(label) {
-                        settings.fontIndex = index
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(Array(["Serif", "Rounded", "Classic", "Mono", "Avenir", "Georgia"].enumerated()), id: \.offset) { index, label in
+                        Button(label) {
+                            settings.fontIndex = index
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(settings.fontIndex == index ? AndroidLook.accentGold : .secondary)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(settings.fontIndex == index ? AndroidLook.accentGold : .secondary)
                 }
             }
 
-            LabeledCardSlider(label: "Text size", value: $settings.sizeScale, range: 0.85...1.2)
+            HStack(spacing: 8) {
+                ForEach(Array(["Small", "Normal", "Large"].enumerated()), id: \.offset) { index, label in
+                    Button(label) {
+                        settings.sizeScale = [0.9, 1.0, 1.16][index]
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(abs(settings.sizeScale - [0.9, 1.0, 1.16][index]) < 0.02 ? AndroidLook.accentGold : .secondary)
+                }
+            }
+
+            LabeledCardSlider(label: "Text size", value: $settings.sizeScale, range: 0.85...1.25)
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
@@ -5985,7 +7848,14 @@ private func cardTextColorOptions(for style: GreetingCardStyle) -> [(name: Strin
         ("Primary", style.primary),
         ("Secondary", style.secondary),
         ("Accent", style.accent),
+        ("Gold", AndroidLook.accentGold),
+        ("Burgundy", Color(red: 0.48, green: 0.07, blue: 0.11)),
+        ("Navy", Color(red: 0.04, green: 0.16, blue: 0.27)),
+        ("Emerald", Color(red: 0.03, green: 0.27, blue: 0.22)),
+        ("Rose", Color(red: 0.78, green: 0.30, blue: 0.42)),
+        ("Plum", Color(red: 0.33, green: 0.20, blue: 0.52)),
         ("Dark", AndroidLook.deepBrown),
+        ("Ink", Color.black.opacity(0.86)),
         ("Light", Color.white)
     ]
 }
@@ -6012,14 +7882,249 @@ private struct AICardOrnamentDivider: View {
 
 private struct BusinessDirectoryScreen: View {
     @Bindable var viewModel: AppViewModel
+    @State private var showAddBusiness = false
+    @State private var businessToDelete: FamilyBusiness?
 
     var body: some View {
-        PlaceholderFeatureScreen(
-            viewModel: viewModel,
-            title: localized("Business Directory", language: viewModel.language),
-            systemImage: "building.2.fill",
-            message: "A shared family business directory from Android is now represented in iOS navigation. Backend business collection syncing can be added next."
+        AppBackground {
+            NavigationStack {
+                Group {
+                    if viewModel.visibleBusinesses.isEmpty {
+                        ContentUnavailableView(
+                            "No businesses found",
+                            systemImage: "building.2.fill"
+                        )
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 12) {
+                                ForEach(viewModel.visibleBusinesses) { business in
+                                    BusinessCard(
+                                        business: business,
+                                        canDelete: viewModel.hasAdminPrivileges || business.addedBy == viewModel.currentUser?.id,
+                                        onDelete: {
+                                            businessToDelete = business
+                                        }
+                                    )
+                                }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 14)
+                        }
+                    }
+                }
+                .navigationTitle(localized("Business Directory", language: viewModel.language))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button {
+                            viewModel.showDashboard()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.headline.weight(.semibold))
+                                .frame(width: 40, height: 40)
+                        }
+                        .accessibilityLabel("Back")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showAddBusiness = true
+                        } label: {
+                            Image(systemName: "plus")
+                                .font(.headline.weight(.bold))
+                                .frame(width: 40, height: 40)
+                        }
+                        .accessibilityLabel("Add Business")
+                    }
+                }
+                .sheet(isPresented: $showAddBusiness) {
+                    AddBusinessSheet(
+                        onSave: { business in
+                            Task {
+                                await viewModel.addBusiness(business)
+                            }
+                            showAddBusiness = false
+                        },
+                        onCancel: {
+                            showAddBusiness = false
+                        }
+                    )
+                }
+                .alert("Confirm Delete", isPresented: Binding(
+                    get: { businessToDelete != nil },
+                    set: { if !$0 { businessToDelete = nil } }
+                )) {
+                    Button("Cancel", role: .cancel) {
+                        businessToDelete = nil
+                    }
+                    Button("Delete", role: .destructive) {
+                        if let businessToDelete {
+                            Task {
+                                await viewModel.deleteBusiness(businessToDelete)
+                            }
+                        }
+                        businessToDelete = nil
+                    }
+                } message: {
+                    Text("Are you sure you want to delete this business listing?")
+                }
+            }
+        }
+    }
+}
+
+private struct BusinessCard: View {
+    let business: FamilyBusiness
+    let canDelete: Bool
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(business.name)
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(AndroidLook.deepBrown)
+                    Text(business.type.isEmpty ? "Business" : business.type)
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(AndroidLook.accentGold)
+                }
+
+                Spacer()
+
+                if canDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.red)
+                            .frame(width: 34, height: 34)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Delete")
+                }
+            }
+
+            Text("Owner: \(business.ownerName)")
+                .font(.subheadline)
+                .foregroundStyle(AndroidLook.deepBrown)
+
+            HStack(spacing: 10) {
+                Image(systemName: "phone.fill")
+                    .foregroundStyle(AndroidLook.mutedBrown)
+                Text(business.contactNumber)
+                    .font(.subheadline)
+                    .foregroundStyle(AndroidLook.deepBrown)
+                Spacer()
+                if let callURL = URL(string: "tel://\(business.contactNumber)") {
+                    Link(destination: callURL) {
+                        Label("Call", systemImage: "phone.fill")
+                            .font(.caption.weight(.bold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(AndroidLook.accentGold)
+                }
+            }
+
+            if !business.address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Label(business.address, systemImage: "location.fill")
+                    .font(.caption)
+                    .foregroundStyle(AndroidLook.mutedBrown)
+            }
+
+            if let mapURL = businessDirectoryURL(business.locationLink) {
+                Link(destination: mapURL) {
+                    Label("View on Map", systemImage: "map.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
+    }
+}
+
+private func businessDirectoryURL(_ value: String) -> URL? {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if let url = URL(string: trimmed), url.scheme != nil {
+        return url
+    }
+    return URL(string: "https://\(trimmed)")
+}
+
+private struct AddBusinessSheet: View {
+    let onSave: (FamilyBusiness) -> Void
+    let onCancel: () -> Void
+
+    @State private var name = ""
+    @State private var ownerName = ""
+    @State private var contactNumber = ""
+    @State private var type = "Business"
+    @State private var address = ""
+    @State private var locationLink = ""
+
+    private let businessTypes = ["Business", "Consultancy", "Shop", "Event Hall", "Public Place", "Other"]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Business") {
+                    TextField("Business Name", text: $name)
+                    TextField("Owner Name", text: $ownerName)
+                    TextField("Contact Number", text: $contactNumber)
+                        .keyboardType(.phonePad)
+                    Picker("Type", selection: $type) {
+                        ForEach(businessTypes, id: \.self) { businessType in
+                            Text(businessType).tag(businessType)
+                        }
+                    }
+                    TextField("Address", text: $address, axis: .vertical)
+                    TextField("Maps Link", text: $locationLink, axis: .vertical)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                }
+            }
+            .navigationTitle("Add Business")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        onSave(
+                            FamilyBusiness(
+                                id: "",
+                                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                                ownerName: ownerName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                contactNumber: contactNumber.trimmingCharacters(in: .whitespacesAndNewlines),
+                                type: type,
+                                address: address.trimmingCharacters(in: .whitespacesAndNewlines),
+                                locationLink: locationLink.trimmingCharacters(in: .whitespacesAndNewlines),
+                                latitude: nil,
+                                longitude: nil,
+                                addedBy: "",
+                                treeId: "primary",
+                                timestamp: Int64(Date().timeIntervalSince1970 * 1000)
+                            )
+                        )
+                    }
+                    .disabled(!canSave)
+                }
+            }
+        }
+    }
+
+    private var canSave: Bool {
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !ownerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !contactNumber.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
@@ -6101,7 +8206,7 @@ private struct EmergencyScreen: View {
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(hasSavedLocation ? AndroidLook.accentGold : .secondary)
                 .frame(width: 44, height: 44)
-                .background(Color.white.opacity(0.58), in: Circle())
+                .background(Color.white.opacity(0.84), in: Circle())
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(hasSavedLocation ? "Location ready" : "Location needed for nearby search")
@@ -6114,7 +8219,7 @@ private struct EmergencyScreen: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -6202,7 +8307,7 @@ private struct EmergencyActionRow: View {
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
@@ -6337,7 +8442,7 @@ private struct AchievementCard: View {
                     }
                 }
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.white.opacity(0.62))
+                .foregroundStyle(Color.white.opacity(0.86))
 
                 if let mapsURL = sanitizedURL(achievement.mapsLink) {
                     Link(destination: mapsURL) {
@@ -6368,17 +8473,12 @@ private struct AchievementCard: View {
                 .frame(maxWidth: .infinity)
                 .clipped()
         } else if let url = sanitizedURL(achievement.imageURL) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image
-                        .resizable()
-                        .scaledToFill()
-                case .empty:
-                    ProgressView()
-                default:
-                    EmptyView()
-                }
+            CachedRemoteImage(url: url) { image in
+                image
+                    .resizable()
+                    .scaledToFill()
+            } placeholder: {
+                ProgressView()
             }
             .frame(height: 200)
             .frame(maxWidth: .infinity)
@@ -6701,15 +8801,12 @@ private struct AvatarView: View {
                     .resizable()
                     .scaledToFill()
             } else if let url = imageURL(fromStoredPhoto: member.photoURL) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case let .success(image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                    default:
-                        placeholder
-                    }
+                CachedRemoteImage(url: url) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                } placeholder: {
+                    placeholder
                 }
             } else {
                 placeholder
@@ -6767,13 +8864,10 @@ private struct ProfilePhotoEditor: View {
             Image(uiImage: uiImage)
                 .resizable()
         } else if let url = imageURL(fromStoredPhoto: storedPhoto) {
-            AsyncImage(url: url) { phase in
-                switch phase {
-                case let .success(image):
-                    image.resizable()
-                default:
-                    placeholder
-                }
+            CachedRemoteImage(url: url) { image in
+                image.resizable()
+            } placeholder: {
+                placeholder
             }
         } else {
             placeholder
@@ -6863,11 +8957,187 @@ private struct StatTile: View {
         }
         .padding(max(10.0, 12.0 * layoutScale))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.58), in: RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous))
+        .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous)
                 .stroke(Color.black.opacity(0.08), lineWidth: 1)
         )
+    }
+}
+
+private struct DashboardWeatherTile: View {
+    @StateObject private var weatherModel = DashboardWeatherModel()
+    let layoutScale: CGFloat
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: max(3.0, 4.0 * layoutScale)) {
+            HStack(spacing: 6) {
+                Text(weatherModel.icon)
+                    .font(.system(size: max(15.0, 17.0 * layoutScale)))
+                Text(weatherModel.temperatureText)
+                    .font(.system(size: max(16.0, 18.0 * layoutScale), weight: .bold, design: .rounded))
+                    .foregroundStyle(AndroidLook.deepBrown)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+
+            Text(weatherModel.summaryText)
+                .font(.system(size: max(10.0, 12.0 * layoutScale), weight: .regular, design: .default))
+                .foregroundStyle(AndroidLook.mutedBrown)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
+        .padding(max(10.0, 12.0 * layoutScale))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: max(14.0, 16.0 * layoutScale), style: .continuous)
+                .stroke(Color.black.opacity(0.08), lineWidth: 1)
+        )
+        .task {
+            weatherModel.requestWeather()
+        }
+    }
+}
+
+private let dashboardWeatherLogger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "CircleBirthdays",
+    category: "DashboardWeather"
+)
+
+@MainActor
+private final class DashboardWeatherModel: NSObject, ObservableObject, CLLocationManagerDelegate {
+    @Published var temperatureText = "--"
+    @Published var summaryText = "Weather"
+    @Published var icon = "○"
+
+    private let locationManager = CLLocationManager()
+    private var didRequestWeather = false
+
+    override init() {
+        super.init()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers
+    }
+
+    func requestWeather() {
+        guard !didRequestWeather else { return }
+        didRequestWeather = true
+
+        guard CLLocationManager.locationServicesEnabled() else {
+            dashboardWeatherLogger.error("Location services are disabled; WeatherKit request will not start.")
+            summaryText = "Location off"
+            icon = "⌖"
+            return
+        }
+
+        dashboardWeatherLogger.info("Weather request started. Authorization: \(String(describing: self.locationManager.authorizationStatus), privacy: .public)")
+
+        switch locationManager.authorizationStatus {
+        case .notDetermined:
+            summaryText = "Allow location"
+            icon = "⌖"
+            dashboardWeatherLogger.info("Requesting location authorization before WeatherKit fetch.")
+            locationManager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse:
+            summaryText = "Locating"
+            icon = "⌖"
+            dashboardWeatherLogger.info("Requesting current location for WeatherKit fetch.")
+            locationManager.requestLocation()
+        case .denied, .restricted:
+            summaryText = "Location off"
+            icon = "⌖"
+            dashboardWeatherLogger.error("Location authorization denied or restricted; WeatherKit request will not start.")
+        @unknown default:
+            summaryText = "Weather"
+            dashboardWeatherLogger.error("Unknown location authorization status; WeatherKit request will not start.")
+        }
+    }
+
+    nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        Task { @MainActor in
+            dashboardWeatherLogger.info("Location authorization changed: \(String(describing: manager.authorizationStatus), privacy: .public)")
+            guard manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse else {
+                if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
+                    summaryText = "Location off"
+                    icon = "⌖"
+                    dashboardWeatherLogger.error("Location authorization denied or restricted after prompt.")
+                }
+                return
+            }
+            summaryText = "Locating"
+            dashboardWeatherLogger.info("Location authorized; requesting current location.")
+            manager.requestLocation()
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let location = locations.last else { return }
+        Task { @MainActor in
+            dashboardWeatherLogger.info("Location received for WeatherKit fetch: lat \(location.coordinate.latitude, privacy: .public), lon \(location.coordinate.longitude, privacy: .public)")
+            await fetchWeather(for: location)
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        Task { @MainActor in
+            temperatureText = "--"
+            summaryText = "Weather unavailable"
+            icon = "○"
+            dashboardWeatherLogger.error("Location request failed before WeatherKit fetch: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func fetchWeather(for location: CLLocation) async {
+        #if canImport(WeatherKit)
+        do {
+            dashboardWeatherLogger.info("Calling WeatherKit WeatherService.shared.weather(for:).")
+            let weather = try await WeatherService.shared.weather(for: location)
+            let current = weather.currentWeather
+            let celsius = current.temperature.converted(to: .celsius).value
+            let condition = String(describing: current.condition)
+            let windKph = current.wind.speed.converted(to: .kilometersPerHour).value
+
+            temperatureText = "\(Int(celsius.rounded()))°C"
+            summaryText = Self.summary(for: condition, windKph: windKph)
+            icon = Self.icon(for: summaryText)
+            dashboardWeatherLogger.info("WeatherKit fetch succeeded. Condition: \(condition, privacy: .public), tempC: \(celsius, privacy: .public)")
+        } catch {
+            temperatureText = "--"
+            summaryText = "Weather unavailable"
+            icon = "○"
+            dashboardWeatherLogger.error("WeatherKit fetch failed: \(error.localizedDescription, privacy: .public)")
+        }
+        #else
+        temperatureText = "--"
+        summaryText = "WeatherKit off"
+        icon = "○"
+        dashboardWeatherLogger.error("WeatherKit framework is not available in this build.")
+        #endif
+    }
+
+    private static func summary(for condition: String, windKph: Double) -> String {
+        if windKph >= 24 {
+            return "Windy"
+        }
+
+        let lower = condition.lowercased()
+        if lower.contains("cloud") || lower.contains("overcast") || lower.contains("fog") || lower.contains("haze") {
+            return "Cloudy"
+        }
+        if lower.contains("rain") || lower.contains("drizzle") || lower.contains("storm") {
+            return "Rainy"
+        }
+        return "Sunny"
+    }
+
+    private static func icon(for summary: String) -> String {
+        switch summary {
+        case "Cloudy": return "☁"
+        case "Windy": return "≋"
+        case "Rainy": return "☂"
+        default: return "☀"
+        }
     }
 }
 
@@ -6883,7 +9153,7 @@ private struct DashboardActionLabel<Background: ShapeStyle>: View {
     var body: some View {
         ZStack {
             Rectangle()
-                .fill(Color.white.opacity(0.58))
+                .fill(Color.white.opacity(0.84))
 
             VStack(alignment: .center, spacing: max(7.0, 8.0 * layoutScale)) {
                 ZStack {
@@ -6924,9 +9194,10 @@ private struct DashboardActionLabel<Background: ShapeStyle>: View {
     }
 }
 
-private struct MemberEditScreen: View {
+struct MemberEditScreen: View {
     let originalMember: Member
     let canSaveDirectly: Bool
+    let showsFamilyId: Bool
     let language: AppLanguage
     let onSave: (Member) -> Void
     let onRequestOverride: (String) -> Void
@@ -6963,6 +9234,7 @@ private struct MemberEditScreen: View {
     init(
         originalMember: Member,
         canSaveDirectly: Bool,
+        showsFamilyId: Bool = false,
         language: AppLanguage,
         onSave: @escaping (Member) -> Void,
         onRequestOverride: @escaping (String) -> Void,
@@ -6970,6 +9242,7 @@ private struct MemberEditScreen: View {
     ) {
         self.originalMember = originalMember
         self.canSaveDirectly = canSaveDirectly
+        self.showsFamilyId = showsFamilyId
         self.language = language
         self.onSave = onSave
         self.onRequestOverride = onRequestOverride
@@ -7002,6 +9275,13 @@ private struct MemberEditScreen: View {
         NavigationStack {
             Form {
                 Section(localized("Basic", language: language)) {
+                    if showsFamilyId {
+                        LabeledContent("Family ID") {
+                            Text(originalMember.familyId.isEmpty ? "Not set" : originalMember.familyId)
+                                .font(.body.monospaced().weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     TextField("Name", text: $name)
                     ISODatePickerRow(title: "Date of Birth", value: $dateOfBirth, allowsClear: false)
                     TextField("Phone Number", text: $phoneNumber)
@@ -7275,7 +9555,7 @@ private struct ISODatePickerRow: View {
     }
 }
 
-private struct MemberDetailScreen: View {
+struct MemberDetailScreen: View {
     let member: Member
     let canEdit: Bool
     let language: AppLanguage
@@ -7536,8 +9816,97 @@ private struct RelationshipOverrideRow: View {
                 .foregroundStyle(.secondary)
             HStack {
                 Spacer()
-                Button("Approve", action: onApprove)
-                    .buttonStyle(.borderedProminent)
+                ApprovalIconButton(systemImage: "checkmark", title: "Approve", tint: .green, action: onApprove)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct ContentApprovalRow: View {
+    let title: String
+    let detail: String
+    let onApprove: () -> Void
+    let onReject: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title)
+                    .font(.headline)
+                    .lineLimit(2)
+                Text(detail)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 8)
+
+            ApprovalIconButton(systemImage: "xmark", title: "Reject", role: .destructive, action: onReject)
+            ApprovalIconButton(systemImage: "checkmark", title: "Approve", tint: .green, action: onApprove)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct SignupApprovalRow: View {
+    let request: SignupRequest
+    let suggestedMember: Member?
+    let assignableMembers: [Member]
+    let onApprove: (Member) -> Void
+    let onReject: () -> Void
+    @State private var selectedMemberID: String?
+
+    private var selectedMember: Member? {
+        let resolvedID = selectedMemberID ?? suggestedMember?.id
+        return assignableMembers.first { $0.id == resolvedID }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(request.name)
+                .font(.headline)
+
+            Text("Parent: \(request.parentName)")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Text("Mobile: \(request.mobileNumber)\(request.email.isEmpty ? "" : " • \(request.email)")")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            HStack(spacing: 8) {
+                Menu {
+                    ForEach(assignableMembers) { member in
+                        Button(member.name) {
+                            selectedMemberID = member.id
+                        }
+                    }
+                } label: {
+                    Label(selectedMember?.name ?? "Choose profile", systemImage: "person.crop.circle.badge.checkmark")
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                ApprovalIconButton(systemImage: "xmark", title: "Reject", role: .destructive, action: onReject)
+                ApprovalIconButton(systemImage: "checkmark", title: "Save", tint: .green) {
+                    if let selectedMember {
+                        onApprove(selectedMember)
+                    }
+                }
+                .disabled(selectedMember == nil)
+            }
+
+            if let suggestedMember {
+                Text("Suggested: \(suggestedMember.name)")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("No confident match. Reassign to a profile or reject.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
             }
         }
         .padding(.vertical, 4)
@@ -7560,14 +9929,31 @@ private struct DeletionRequestRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
-                Button("Reject", action: onReject)
-                    .buttonStyle(.bordered)
+                ApprovalIconButton(systemImage: "xmark", title: "Reject", role: .destructive, action: onReject)
                 Spacer()
-                Button("Approve", action: onApprove)
-                    .buttonStyle(.borderedProminent)
+                ApprovalIconButton(systemImage: "checkmark", title: "Approve", tint: .green, action: onApprove)
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+private struct ApprovalIconButton: View {
+    let systemImage: String
+    let title: String
+    var role: ButtonRole?
+    var tint: Color?
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: role, action: action) {
+            Image(systemName: systemImage)
+                .font(.headline.weight(.bold))
+                .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(tint)
+        .accessibilityLabel(title)
     }
 }
 
@@ -7640,7 +10026,7 @@ private struct FamilyTreeCanvas: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            ScrollView([.horizontal, .vertical]) {
+            ScrollView([.horizontal, .vertical], showsIndicators: true) {
                 LazyVStack(alignment: .center, spacing: 28) {
                     if rootMembers.isEmpty {
                         ContentUnavailableView(
@@ -7664,8 +10050,9 @@ private struct FamilyTreeCanvas: View {
                 }
                 .padding(.horizontal, 28)
                 .padding(.vertical, 24)
-                .scaleEffect(scale)
-                .frame(minWidth: 760, minHeight: 560, alignment: .top)
+                .frame(width: canvasBaseWidth, height: canvasBaseHeight, alignment: .top)
+                .scaleEffect(scale, anchor: .topLeading)
+                .frame(width: canvasBaseWidth * scale, height: canvasBaseHeight * scale, alignment: .topLeading)
             }
             .background(Color(red: 0.94, green: 0.92, blue: 0.88))
             .overlay(alignment: .top) {
@@ -7715,10 +10102,29 @@ private struct FamilyTreeCanvas: View {
             }
     }
 
+    private var canvasBaseWidth: CGFloat {
+        let nonSpouseCount = displayMembers.filter { !$0.familyId.hasSuffix("0") }.count
+        let rootAllowance = max(1, rootMembers.count)
+        return max(1_180, CGFloat(max(1, nonSpouseCount)) * 190 + CGFloat(rootAllowance) * 240)
+    }
+
+    private var canvasBaseHeight: CGFloat {
+        let deepestGeneration = displayMembers.map { generationDepth(for: $0.familyId) }.max() ?? 1
+        return max(780, CGFloat(deepestGeneration + 1) * 230 + 220)
+    }
+
     private var rootMembers: [Member] {
         let nonSpouseMembers = displayMembers.filter { !$0.familyId.hasSuffix("0") }
-        if let primaryRoot = nonSpouseMembers.first(where: { $0.familyId == "P" }) {
-            return [primaryRoot]
+        let branchRootMembers = nonSpouseMembers.filter { member in
+            guard member.familyId != "P" else { return false }
+            let parentBase = parentBaseId(for: member.familyId)
+            return parentBase.isEmpty
+                || parentBase == "P"
+                || !displayMembers.contains { $0.familyId == parentBase }
+        }
+
+        if !branchRootMembers.isEmpty {
+            return branchRootMembers
         }
 
         return nonSpouseMembers.filter { member in
@@ -7731,6 +10137,12 @@ private struct FamilyTreeCanvas: View {
         let base = familyId.hasSuffix("0") ? String(familyId.dropLast()) : familyId
         guard !base.isEmpty, base != "P" else { return "" }
         return base.count == 1 ? "P" : String(base.dropLast())
+    }
+
+    private func generationDepth(for familyId: String) -> Int {
+        let base = familyId.hasSuffix("0") ? String(familyId.dropLast()) : familyId
+        if base == "P" || base.isEmpty { return 0 }
+        return max(1, base.count)
     }
 
     private var treeToolbar: some View {

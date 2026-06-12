@@ -10,7 +10,26 @@ struct FirebaseMemberRepository: MemberRepository {
     }
 
     func fetchPendingMembers() async throws -> [Member] {
-        try await fetchCollection(named: "pending_updates")
+        #if canImport(FirebaseFirestore)
+        guard FirebaseBootstrap.isConfigured else {
+            throw FirebaseRepositoryError.notConfigured
+        }
+
+        let snapshot = try await Firestore.firestore()
+            .collection("pending_updates")
+            .getDocuments()
+
+        return snapshot.documents
+            .map(Member.init(document:))
+            .sorted { lhs, rhs in
+                if lhs.familyId == rhs.familyId {
+                    return lhs.name < rhs.name
+                }
+                return lhs.familyId < rhs.familyId
+            }
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
     }
 
     func saveMember(_ member: Member, toPending: Bool) async throws {
@@ -85,6 +104,59 @@ struct FirebaseMemberRepository: MemberRepository {
             .collection("members")
             .document(userID)
             .setData(["lastLoggedIn": timestamp], merge: true)
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
+    func fetchSignupRequests() async throws -> [SignupRequest] {
+        #if canImport(FirebaseFirestore)
+        guard FirebaseBootstrap.isConfigured else {
+            throw FirebaseRepositoryError.notConfigured
+        }
+
+        let snapshot = try await Firestore.firestore()
+            .collection("signup_requests")
+            .order(by: "requestedAt", descending: true)
+            .getDocuments()
+
+        return snapshot.documents
+            .map(SignupRequest.init(document:))
+            .filter { $0.normalizedStatus.isPendingStatus }
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
+    func submitSignupRequest(_ request: SignupRequest) async throws {
+        #if canImport(FirebaseFirestore)
+        guard FirebaseBootstrap.isConfigured else {
+            throw FirebaseRepositoryError.notConfigured
+        }
+
+        try await Firestore.firestore()
+            .collection("signup_requests")
+            .document(request.id)
+            .setData(request.firestoreData)
+        #else
+        throw FirebaseRepositoryError.sdkMissing
+        #endif
+    }
+
+    func updateSignupRequest(_ request: SignupRequest) async throws {
+        try await submitSignupRequest(request)
+    }
+
+    func deleteSignupRequest(requestID: String) async throws {
+        #if canImport(FirebaseFirestore)
+        guard FirebaseBootstrap.isConfigured else {
+            throw FirebaseRepositoryError.notConfigured
+        }
+
+        try await Firestore.firestore()
+            .collection("signup_requests")
+            .document(requestID)
+            .delete()
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif
@@ -212,7 +284,7 @@ private extension Member {
             isPrimaryTree: data["isPrimaryTree"] as? Bool ?? true,
             secondaryTreeEnabled: data["secondaryTreeEnabled"] as? Bool ?? false,
             treeId: data["treeId"] as? String ?? "primary",
-            status: data["status"] as? String ?? "APPROVED",
+            status: (data["status"] as? String ?? "APPROVED").approvalNormalizedStatus,
             lastLoggedIn: data["lastLoggedIn"] as? Int64 ?? (data["lastLoggedIn"] as? NSNumber)?.int64Value,
             relationship: data["relationship"] as? String,
             fcmToken: data["fcmToken"] as? String,
@@ -252,7 +324,7 @@ private extension Member {
             "isPrimaryTree": isPrimaryTree,
             "secondaryTreeEnabled": secondaryTreeEnabled,
             "treeId": treeId,
-            "status": status,
+            "status": status.approvalNormalizedStatus,
             "points": points,
             "level": level,
             "badges": badges
@@ -288,6 +360,38 @@ private extension Member {
 }
 
 #if canImport(FirebaseFirestore)
+private extension SignupRequest {
+    init(document: QueryDocumentSnapshot) {
+        let data = document.data()
+        self.init(
+            id: document.documentID,
+            name: data["name"] as? String ?? "",
+            parentName: data["parentName"] as? String ?? "",
+            mobileNumber: data["mobileNumber"] as? String ?? "",
+            email: data["email"] as? String ?? "",
+            status: (data["status"] as? String ?? "PENDING").approvalNormalizedStatus,
+            requestedAt: data["requestedAt"] as? Int64 ?? (data["requestedAt"] as? NSNumber)?.int64Value ?? 0,
+            suggestedMemberID: data["suggestedMemberID"] as? String,
+            suggestedMemberName: data["suggestedMemberName"] as? String
+        )
+    }
+
+    var firestoreData: [String: Any] {
+        var data: [String: Any] = [
+            "name": name,
+            "parentName": parentName,
+            "mobileNumber": mobileNumber,
+            "email": email,
+            "status": normalizedStatus,
+            "requestedAt": requestedAt
+        ]
+
+        data["suggestedMemberID"] = suggestedMemberID
+        data["suggestedMemberName"] = suggestedMemberName
+        return data
+    }
+}
+
 private extension RelationshipOverride {
     init?(document: QueryDocumentSnapshot) {
         let data = document.data()
@@ -299,7 +403,7 @@ private extension RelationshipOverride {
             targetId: data["targetId"] as? String ?? "",
             targetName: data["targetName"] as? String ?? "",
             relationship: data["relationship"] as? String ?? "",
-            status: data["status"] as? String ?? "PENDING"
+            status: (data["status"] as? String ?? "PENDING").approvalNormalizedStatus
         )
     }
 
@@ -311,7 +415,7 @@ private extension RelationshipOverride {
             "targetId": targetId,
             "targetName": targetName,
             "relationship": relationship,
-            "status": status
+            "status": status.approvalNormalizedStatus
         ]
     }
 }

@@ -3,6 +3,7 @@ import Foundation
 enum FamilyUtils {
     static func resolveLinks(member: Member, allMembers: [Member], currentUser: Member? = nil) -> Member {
         let familyId = member.familyId
+        let normalizedId = normalizedFamilyId(familyId)
         guard !familyId.isEmpty else { return member }
 
         var spouseName: String?
@@ -12,28 +13,29 @@ enum FamilyUtils {
         var siblings: [String] = []
 
         var spouseMarriageDate: String?
-        if familyId.hasSuffix("0") {
-            let partnerId = String(familyId.dropLast())
-            let partner = allMembers.first { $0.familyId == partnerId }
-            spouseName = partner?.name
+        if normalizedId.hasSuffix("0") {
+            let partnerId = String(normalizedId.dropLast())
+            let partner = findMember(withFamilyId: partnerId, in: allMembers)
+            spouseName = partner?.name ?? partnerId
             spouseMarriageDate = partner?.marriageDate
         } else {
-            let partnerId = familyId + "0"
-            let partner = allMembers.first { $0.familyId == partnerId }
-            spouseName = partner?.name
+            let partnerId = normalizedId + "0"
+            let partner = findMember(withFamilyId: partnerId, in: allMembers)
+            spouseName = partner?.name ?? partnerId
             spouseMarriageDate = partner?.marriageDate
         }
 
         let effectiveMarriageDate = member.marriageDate ?? spouseMarriageDate
 
-        let isSpouseSuffix = familyId.hasSuffix("0")
-        let baseId = isSpouseSuffix ? String(familyId.dropLast()) : familyId
+        let isSpouseSuffix = normalizedId.hasSuffix("0")
+        let baseId = baseFamilyId(familyId)
+        let hierarchy = FamilyHierarchy(members: allMembers)
 
-        if !isSpouseSuffix, (baseId.count > 1 || (baseId.count == 1 && baseId != "P")) {
-            let parentBaseId = baseId.count > 1 ? String(baseId.dropLast()) : "P"
-            let parentSpouseId = parentBaseId == "P" ? "P0" : parentBaseId + "0"
-            let p1 = allMembers.first { $0.familyId == parentBaseId }
-            let p2 = allMembers.first { $0.familyId == parentSpouseId }
+        if !isSpouseSuffix {
+            let parentBaseId = hierarchy.parentBase(for: baseId)
+            let parentSpouseId = parentBaseId.isEmpty ? "" : parentBaseId + "0"
+            let p1 = findMember(withFamilyId: parentBaseId, in: allMembers)
+            let p2 = findMember(withFamilyId: parentSpouseId, in: allMembers)
 
             if p1 != nil || p2 != nil {
                 if isMale(p1?.gender) {
@@ -52,19 +54,16 @@ enum FamilyUtils {
             }
 
             let siblingsFilter: (Member) -> Bool
-            if parentBaseId == "P" {
+            if parentBaseId.isEmpty {
                 siblingsFilter = { candidate in
-                    candidate.familyId.count == 1
-                        && candidate.familyId != "P"
-                        && !candidate.familyId.hasSuffix("0")
-                        && candidate.familyId != baseId
+                    false
                 }
             } else {
                 siblingsFilter = { candidate in
-                    candidate.familyId.count == baseId.count
-                        && candidate.familyId.hasPrefix(parentBaseId)
-                        && !candidate.familyId.hasSuffix("0")
-                        && candidate.familyId != baseId
+                    let candidateBase = baseFamilyId(candidate.familyId)
+                    return candidateBase != baseId
+                        && !isSpouseFamilyId(candidate.familyId)
+                        && hierarchy.parentBase(for: candidateBase) == parentBaseId
                 }
             }
 
@@ -72,18 +71,10 @@ enum FamilyUtils {
         }
 
         let childrenFilter: (Member) -> Bool
-        if baseId == "P" {
-            childrenFilter = { candidate in
-                candidate.familyId.count == 1
-                    && candidate.familyId != "P"
-                    && !candidate.familyId.hasSuffix("0")
-            }
-        } else {
-            childrenFilter = { candidate in
-                candidate.familyId.count == baseId.count + 1
-                    && candidate.familyId.hasPrefix(baseId)
-                    && !candidate.familyId.hasSuffix("0")
-            }
+        childrenFilter = { candidate in
+            let candidateBase = baseFamilyId(candidate.familyId)
+            return !isSpouseFamilyId(candidate.familyId)
+                && hierarchy.parentBase(for: candidateBase) == baseId
         }
 
         allMembers.filter(childrenFilter).sorted { $0.name < $1.name }.forEach { children.append($0.name) }
@@ -93,7 +84,13 @@ enum FamilyUtils {
             .compactMap { $0 }
             .joined(separator: " ")
 
-        let inferredRelationship = currentUser.flatMap { member.manualRelationships[$0.id] } ?? {
+        let manualRelationship = currentUser
+            .flatMap { member.manualRelationships[$0.id] }
+            .flatMap { relationship -> String? in
+                let trimmed = relationship.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+        let inferredRelationship = manualRelationship ?? {
             guard let currentUser else { return nil }
             return getRelationship(target: member, observer: currentUser, allMembers: allMembers)
         }()
@@ -111,13 +108,18 @@ enum FamilyUtils {
     static func getRelationship(target: Member, observer: Member, allMembers: [Member]) -> String? {
         if target.id == observer.id { return nil }
 
-        let targetId = target.familyId
-        let observerId = observer.familyId
+        let targetId = normalizedFamilyId(target.familyId)
+        let observerId = normalizedFamilyId(observer.familyId)
         guard !targetId.isEmpty, !observerId.isEmpty else { return nil }
+
+        let manual = target.manualRelationships[observer.id]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let manual, !manual.isEmpty {
+            return manual
+        }
 
         if observerId.hasSuffix("0") {
             let partnerBase = String(observerId.dropLast())
-            if let partner = allMembers.first(where: { $0.familyId == partnerBase }),
+            if let partner = findMember(withFamilyId: partnerBase, in: allMembers),
                let relToPartner = getRelationship(target: target, observer: partner, allMembers: allMembers) {
                 if !isFemale(partner.gender) {
                     return switch relToPartner {
@@ -140,13 +142,32 @@ enum FamilyUtils {
             }
         }
 
-        let targetBase = targetId.hasSuffix("0") ? String(targetId.dropLast()) : targetId
-        let observerBase = observerId.hasSuffix("0") ? String(observerId.dropLast()) : observerId
-        let targetGeneration = targetBase == "P" ? 0 : targetBase.count
-        let observerGeneration = observerBase == "P" ? 0 : observerBase.count
+        let targetBase = baseFamilyId(targetId)
+        let observerBase = baseFamilyId(observerId)
+        let targetGeneration = relationshipGeneration(for: targetBase)
+        let observerGeneration = relationshipGeneration(for: observerBase)
         let diff = observerGeneration - targetGeneration
         let targetIsSpouse = targetId.hasSuffix("0")
         let targetIsFemale = isFemale(target.gender)
+
+        if targetIsSpouse {
+            let relToPartner: String?
+            if let partner = findMember(withFamilyId: targetBase, in: allMembers), partner.id != observer.id {
+                relToPartner = getRelationship(target: partner, observer: observer, allMembers: allMembers)
+            } else {
+                relToPartner = getRelationship(
+                    targetFamilyId: targetBase,
+                    targetGender: nil,
+                    observerFamilyId: observerId,
+                    allMembers: allMembers
+                )
+            }
+
+            if let relToPartner,
+               let spouseRelationship = relationshipForSpouse(of: relToPartner, spouseIsFemale: targetIsFemale) {
+                return spouseRelationship
+            }
+        }
 
         if diff == 0 {
             if targetBase == observerBase, targetId != observerId {
@@ -163,28 +184,25 @@ enum FamilyUtils {
         }
 
         if diff == 1 {
-            let observerParentBase = getParentBase(observerBase)
+            let observerParentBase = relationshipParentBase(for: observerBase)
             if targetBase == observerParentBase {
                 return (targetIsFemale || targetIsSpouse) ? "Mummy" : "Papa"
             }
 
-            let observerParentParentBase = getParentBase(observerParentBase)
-            let targetParentBase = getParentBase(targetBase)
+            let observerParentParentBase = relationshipParentBase(for: observerParentBase)
+            let targetParentBase = relationshipParentBase(for: targetBase)
             let areExtendedSiblings = targetParentBase == observerParentParentBase
                 || (!targetParentBase.isEmpty
                     && !observerParentParentBase.isEmpty
-                    && getParentBase(targetParentBase) == getParentBase(observerParentParentBase))
+                    && relationshipParentBase(for: targetParentBase) == relationshipParentBase(for: observerParentParentBase))
 
             if areExtendedSiblings, targetBase != "P" {
-                let elder = isOlderBranch(targetBase, observerParentBase)
-                let observerParent = allMembers.first { $0.familyId == observerParentBase }
-                let coreBranches = Set(["A", "B", "C", "D", "E", "F", "G"])
-                let observerBranch = observerBase.first.map { String($0) }
-                let targetBranch = targetBase.first.map { String($0) }
+                let elder = isOlderPerson(targetBase, than: observerParentBase, allMembers: allMembers)
+                    ?? isOlderBranch(targetBase, observerParentBase)
+                let observerParent = findMember(withFamilyId: observerParentBase, in: allMembers)
                 let isPaternal = observerParent == nil
                     || isMale(observerParent?.gender)
-                    || (observerBranch.map { coreBranches.contains($0) } ?? false
-                        && targetBranch.map { coreBranches.contains($0) } ?? false)
+                    || (isCoreFamilyBranch(targetBase) && isCoreFamilyBranch(observerBase))
 
                 if targetIsSpouse {
                     if targetIsFemale {
@@ -201,12 +219,12 @@ enum FamilyUtils {
         }
 
         if diff == 2 {
-            let observerParentBase = getParentBase(observerBase)
-            let observerParent = allMembers.first { $0.familyId == observerParentBase }
+            let observerParentBase = relationshipParentBase(for: observerBase)
+            let observerParent = findMember(withFamilyId: observerParentBase, in: allMembers)
             let isMaternal = observerParent != nil
                 && isFemale(observerParent?.gender)
                 && !(observerParentBase.count == 1 && observerParentBase != "P")
-            let observerGrandParentBase = getParentBase(observerParentBase)
+            let observerGrandParentBase = relationshipParentBase(for: observerParentBase)
 
             if targetBase == observerGrandParentBase {
                 if isMaternal {
@@ -216,8 +234,9 @@ enum FamilyUtils {
             }
 
             if !targetBase.isEmpty, !observerGrandParentBase.isEmpty,
-               getParentBase(targetBase) == getParentBase(observerGrandParentBase) {
-                let elder = isOlderBranch(targetBase, observerGrandParentBase)
+               relationshipParentBase(for: targetBase) == relationshipParentBase(for: observerGrandParentBase) {
+                let elder = isOlderPerson(targetBase, than: observerGrandParentBase, allMembers: allMembers)
+                    ?? isOlderBranch(targetBase, observerGrandParentBase)
                 if isMaternal {
                     return targetIsFemale
                         ? (elder ? "Badi Nani" : "Choti Nani")
@@ -238,8 +257,8 @@ enum FamilyUtils {
                 return targetIsFemale ? "Beti" : "Beta"
             }
 
-            let targetParentId = getParentBase(targetBase)
-            if let targetParent = allMembers.first(where: { $0.familyId == targetParentId }) {
+            let targetParentId = relationshipParentBase(for: targetBase)
+            if let targetParent = findMember(withFamilyId: targetParentId, in: allMembers) {
                 let relToParent = getRelationship(target: targetParent, observer: observer, allMembers: allMembers)
                 if relToParent == "Bhai" || relToParent == "Bhaiya" || relToParent == "Didi" || relToParent == "Behan" {
                     if targetIsSpouse {
@@ -255,8 +274,8 @@ enum FamilyUtils {
         }
 
         if diff == -2 {
-            let targetParentId = getParentBase(targetBase)
-            if let targetParent = allMembers.first(where: { $0.familyId == targetParentId }) {
+            let targetParentId = relationshipParentBase(for: targetBase)
+            if let targetParent = findMember(withFamilyId: targetParentId, in: allMembers) {
                 let targetParentIsDaughter = isFemale(targetParent.gender)
 
                 if targetBase.hasPrefix(observerBase) {
@@ -268,8 +287,8 @@ enum FamilyUtils {
                         : (targetIsFemale ? "Poti" : "Pota")
                 }
 
-                let targetGrandparentId = getParentBase(targetParentId)
-                if let targetGrandparent = allMembers.first(where: { $0.familyId == targetGrandparentId }) {
+                let targetGrandparentId = relationshipParentBase(for: targetParentId)
+                if let targetGrandparent = findMember(withFamilyId: targetGrandparentId, in: allMembers) {
                     let relToGrandparent = getRelationship(target: targetGrandparent, observer: observer, allMembers: allMembers)
                     if relToGrandparent == "Bhai" || relToGrandparent == "Bhaiya" || relToGrandparent == "Didi" || relToGrandparent == "Behan" {
                         if targetIsSpouse {
@@ -299,6 +318,52 @@ enum FamilyUtils {
         return members.map { resolveLinks(member: $0, allMembers: source, currentUser: currentUser) }
     }
 
+    private static func getRelationship(targetFamilyId: String, targetGender: String?, observerFamilyId: String, allMembers: [Member]) -> String? {
+        let targetId = normalizedFamilyId(targetFamilyId)
+        let observerId = normalizedFamilyId(observerFamilyId)
+        guard !targetId.isEmpty, !observerId.isEmpty else { return nil }
+
+        let target = findMember(withFamilyId: targetId, in: allMembers) ?? placeholderMember(
+            id: "target-\(targetId)",
+            familyId: targetId,
+            gender: targetGender ?? ""
+        )
+        let observer = findMember(withFamilyId: observerId, in: allMembers) ?? placeholderMember(
+            id: "observer-\(observerId)",
+            familyId: observerId,
+            gender: ""
+        )
+        return getRelationship(target: target, observer: observer, allMembers: allMembers)
+    }
+
+    private static func placeholderMember(id: String, familyId: String, gender: String) -> Member {
+        Member(
+            id: id,
+            familyId: familyId,
+            name: familyId,
+            gender: gender,
+            dateOfBirth: "",
+            phoneNumber: "",
+            email: nil,
+            location: nil,
+            spouseName: nil,
+            fatherName: nil,
+            motherName: nil,
+            marriageDate: nil,
+            bereavementDate: nil,
+            photoURL: nil,
+            immediateFamily: "",
+            address: nil,
+            password: nil,
+            isAdmin: false,
+            isEditor: false,
+            status: "approved",
+            lastLoggedIn: nil,
+            relationship: nil,
+            fcmToken: nil
+        )
+    }
+
     private static func isFemale(_ gender: String?) -> Bool {
         let value = gender?.lowercased() ?? ""
         return value == "female" || value == "f" || value == "woman"
@@ -309,9 +374,72 @@ enum FamilyUtils {
         return value == "male" || value == "m" || value == "man"
     }
 
-    private static func getParentBase(_ baseId: String) -> String {
-        if baseId == "P" || baseId.isEmpty { return "" }
-        return baseId.count == 1 ? "P" : String(baseId.dropLast())
+    private static func relationshipGeneration(for baseId: String) -> Int {
+        let normalizedBase = normalizedFamilyId(baseId)
+        if normalizedBase == "P" || normalizedBase.isEmpty { return 0 }
+        return normalizedBase.count
+    }
+
+    private static func relationshipParentBase(for baseId: String) -> String {
+        let normalizedBase = normalizedFamilyId(baseId)
+        if normalizedBase == "P" || normalizedBase.isEmpty { return "" }
+        return normalizedBase.count == 1 ? "P" : String(normalizedBase.dropLast())
+    }
+
+    private static func isCoreFamilyBranch(_ baseId: String) -> Bool {
+        guard let first = normalizedFamilyId(baseId).first else { return false }
+        return first >= "A" && first <= "G"
+    }
+
+    private static func normalizedFamilyId(_ familyId: String) -> String {
+        familyId.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    private static func isSpouseFamilyId(_ familyId: String) -> Bool {
+        normalizedFamilyId(familyId).hasSuffix("0")
+    }
+
+    private static func baseFamilyId(_ familyId: String) -> String {
+        let normalizedId = normalizedFamilyId(familyId)
+        return normalizedId.hasSuffix("0") ? String(normalizedId.dropLast()) : normalizedId
+    }
+
+    private static func findMember(withFamilyId familyId: String, in members: [Member]) -> Member? {
+        let normalizedId = normalizedFamilyId(familyId)
+        return members.first { normalizedFamilyId($0.familyId) == normalizedId }
+    }
+
+    private static func relationshipForSpouse(of partnerRelationship: String, spouseIsFemale: Bool) -> String? {
+        switch partnerRelationship {
+        case "Papa", "Mummy":
+            return spouseIsFemale ? "Mummy" : "Papa"
+        case "Bhai", "Bhaiya", "Behan", "Didi":
+            return spouseIsFemale ? "Bhabhi" : "Jijaji"
+        case "Beta", "Beti", "Pota", "Poti", "Nati", "Natin", "Bhatija", "Bhatiji", "Bhanja", "Bhanji":
+            return spouseIsFemale ? "Bahu" : "Damand"
+        case "Chachaji":
+            return spouseIsFemale ? "Chachiji" : "Chachaji"
+        case "Bade Papa":
+            return spouseIsFemale ? "Badi Amma" : "Bade Papa"
+        case "Bade Mamaji":
+            return spouseIsFemale ? "Badi Mamiji" : "Bade Mamaji"
+        case "Chote Mamaji":
+            return spouseIsFemale ? "Choti Mamiji" : "Chote Mamaji"
+        case "Badi Bua":
+            return spouseIsFemale ? "Badi Bua" : "Bade Fufa"
+        case "Choti Bua":
+            return spouseIsFemale ? "Choti Bua" : "Chote Fufa"
+        case "Badi Mausi":
+            return spouseIsFemale ? "Badi Mausi" : "Bade Mausa"
+        case "Choti Mausi":
+            return spouseIsFemale ? "Choti Mausi" : "Chote Mausa"
+        case "Dadaji", "Dadi":
+            return spouseIsFemale ? "Dadi" : "Dadaji"
+        case "Nana", "Nani":
+            return spouseIsFemale ? "Nani" : "Nana"
+        default:
+            return nil
+        }
     }
 
     private static func isOlderBranch(_ id1: String, _ id2: String) -> Bool {
@@ -330,5 +458,71 @@ enum FamilyUtils {
             index += 1
         }
         return id1.count < id2.count
+    }
+
+    private static func isOlderPerson(_ baseId: String, than referenceBaseId: String, allMembers: [Member]) -> Bool? {
+        guard let date = findMember(withFamilyId: baseId, in: allMembers)?.birthDateValue,
+              let referenceDate = findMember(withFamilyId: referenceBaseId, in: allMembers)?.birthDateValue else {
+            return nil
+        }
+        return date < referenceDate
+    }
+
+    private struct FamilyHierarchy {
+        private let presentBases: Set<String>
+
+        init(members: [Member]) {
+            presentBases = Set(members.compactMap { member -> String? in
+                let base = Self.baseId(member.familyId)
+                guard !base.isEmpty else { return nil }
+                return base
+            })
+        }
+
+        func generation(for baseId: String) -> Int {
+            let normalizedBase = Self.normalizedFamilyId(baseId)
+            guard !normalizedBase.isEmpty else { return 0 }
+            let parent = parentBase(for: normalizedBase)
+            if parent.isEmpty { return 0 }
+            return generation(for: parent) + 1
+        }
+
+        func parentBase(for baseId: String) -> String {
+            let normalizedBase = Self.normalizedFamilyId(baseId)
+            guard !normalizedBase.isEmpty, normalizedBase != "P" else { return "" }
+            if normalizedBase.count == 1 {
+                return presentBases.contains("P") ? "P" : ""
+            }
+
+            var candidate = String(normalizedBase.dropLast())
+            while !candidate.isEmpty {
+                if presentBases.contains(candidate) {
+                    return candidate
+                }
+                candidate = candidate.count > 1 ? String(candidate.dropLast()) : ""
+            }
+            return presentBases.contains("P") ? "P" : ""
+        }
+
+        func areTopLevelSiblings(_ lhs: String, _ rhs: String) -> Bool {
+            let normalizedLhs = Self.normalizedFamilyId(lhs)
+            let normalizedRhs = Self.normalizedFamilyId(rhs)
+            let lhsParent = parentBase(for: normalizedLhs)
+            let rhsParent = parentBase(for: normalizedRhs)
+            return !normalizedLhs.isEmpty
+                && !normalizedRhs.isEmpty
+                && normalizedLhs != normalizedRhs
+                && !lhsParent.isEmpty
+                && lhsParent == rhsParent
+        }
+
+        private static func baseId(_ familyId: String) -> String {
+            let normalizedId = normalizedFamilyId(familyId)
+            return normalizedId.hasSuffix("0") ? String(normalizedId.dropLast()) : normalizedId
+        }
+
+        private static func normalizedFamilyId(_ familyId: String) -> String {
+            familyId.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        }
     }
 }

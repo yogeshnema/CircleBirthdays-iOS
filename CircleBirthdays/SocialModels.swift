@@ -1,5 +1,19 @@
 import Foundation
 
+extension String {
+    var approvalNormalizedStatus: String {
+        trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    }
+
+    var isApprovedStatus: Bool {
+        approvalNormalizedStatus == "APPROVED"
+    }
+
+    var isPendingStatus: Bool {
+        approvalNormalizedStatus == "PENDING"
+    }
+}
+
 struct PostComment: Identifiable, Equatable {
     let id: String
     let userId: String
@@ -121,8 +135,23 @@ struct DeletionRequest: Identifiable, Equatable {
     let status: String
 
     var isPending: Bool {
-        status == "PENDING"
+        status.isPendingStatus
     }
+}
+
+struct FamilyBusiness: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let ownerName: String
+    let contactNumber: String
+    let type: String
+    let address: String
+    let locationLink: String
+    let latitude: Double?
+    let longitude: Double?
+    let addedBy: String
+    let treeId: String
+    let timestamp: Int64
 }
 
 struct AppNotification: Identifiable, Equatable {
