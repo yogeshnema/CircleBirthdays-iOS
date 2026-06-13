@@ -37,73 +37,22 @@ exports.dispatchQueuedNotification = onDocumentCreated("notifications/{notificat
     return;
   }
 
-  const lookup = await loadRecipientTokens(recipientIds);
-  const registrationTokens = lookup
-    .map((item) => item.token)
-    .filter((token) => typeof token === "string" && token.length > 0);
-
-  if (registrationTokens.length === 0) {
-    await snap.ref.set(
-      {
-        status: "NO_TOKENS",
-        processedAt: admin.firestore.FieldValue.serverTimestamp(),
-        recipientCount: recipientIds.length
-      },
-      { merge: true }
-    );
-    return;
-  }
-
-  const message = {
-    notification: {
-      title,
-      body
-    },
-    apns: {
-      headers: {
-        "apns-priority": "10"
-      },
-      payload: {
-        aps: {
-          sound: "default"
-        }
-      }
-    },
-    android: {
-      notification: {
-        sound: "default"
-      }
-    },
-    data: {
-      category,
-      referenceID: referenceId,
-      title,
-      body
-    },
-    tokens: registrationTokens
-  };
-
-  const response = await admin.messaging().sendEachForMulticast(message);
-  const failedTokens = [];
-
-  response.responses.forEach((result, index) => {
-    if (!result.success) {
-      failedTokens.push(registrationTokens[index]);
-    }
+  const result = await sendPushToRecipients({
+    recipientIds,
+    title,
+    body,
+    category,
+    referenceId
   });
-
-  if (failedTokens.length > 0) {
-    await disableInvalidTokens(lookup, failedTokens);
-  }
 
   await snap.ref.set(
     {
-      status: failedTokens.length > 0 ? "PARTIAL" : "SENT",
+      status: result.status,
       processedAt: admin.firestore.FieldValue.serverTimestamp(),
       recipientCount: recipientIds.length,
-      deliveredCount: response.successCount,
-      failedCount: response.failureCount,
-      failedTokens
+      deliveredCount: result.deliveredCount,
+      failedCount: result.failedCount,
+      failedTokens: result.failedTokens
     },
     { merge: true }
   );
@@ -164,11 +113,28 @@ async function loadRecipientTokens(recipientIds) {
     }
 
     const data = snapshot.exists ? snapshot.data() || {} : {};
-    lookups.push({
-      userId,
-      collection,
-      ref: snapshot.exists ? (collection === "members" ? memberRef : pendingRef) : null,
-      token: typeof data.fcmToken === "string" ? data.fcmToken.trim() : ""
+    const tokens = uniqueTokens([
+      typeof data.fcmToken === "string" ? data.fcmToken : "",
+      ...(Array.isArray(data.fcmTokens) ? data.fcmTokens : [])
+    ]);
+
+    if (tokens.length === 0) {
+      lookups.push({
+        userId,
+        collection,
+        ref: snapshot.exists ? (collection === "members" ? memberRef : pendingRef) : null,
+        token: ""
+      });
+      continue;
+    }
+
+    tokens.forEach((token) => {
+      lookups.push({
+        userId,
+        collection,
+        ref: snapshot.exists ? (collection === "members" ? memberRef : pendingRef) : null,
+        token
+      });
     });
   }
 
@@ -177,9 +143,7 @@ async function loadRecipientTokens(recipientIds) {
 
 async function sendPushToRecipients({ recipientIds, title, body, category, referenceId }) {
   const lookup = await loadRecipientTokens(recipientIds);
-  const registrationTokens = lookup
-    .map((item) => item.token)
-    .filter((token) => typeof token === "string" && token.length > 0);
+  const registrationTokens = uniqueTokens(lookup.map((item) => item.token));
 
   if (registrationTokens.length === 0) {
     return {
@@ -190,36 +154,15 @@ async function sendPushToRecipients({ recipientIds, title, body, category, refer
     };
   }
 
-  const message = {
-    notification: {
+  const response = await admin.messaging().sendEachForMulticast(
+    buildPushMessage({
+      tokens: registrationTokens,
       title,
-      body
-    },
-    apns: {
-      headers: {
-        "apns-priority": "10"
-      },
-      payload: {
-        aps: {
-          sound: "default"
-        }
-      }
-    },
-    android: {
-      notification: {
-        sound: "default"
-      }
-    },
-    data: {
+      body,
       category,
-      referenceID: referenceId || "",
-      title,
-      body
-    },
-    tokens: registrationTokens
-  };
-
-  const response = await admin.messaging().sendEachForMulticast(message);
+      referenceId
+    })
+  );
   const failedTokens = [];
 
   response.responses.forEach((result, index) => {
@@ -240,8 +183,60 @@ async function sendPushToRecipients({ recipientIds, title, body, category, refer
   };
 }
 
+function buildPushMessage({ tokens, title, body, category, referenceId }) {
+  const safeTitle = title || "CircleBirthdays";
+  const safeBody = body || "";
+
+  return {
+    notification: {
+      title: safeTitle,
+      body: safeBody
+    },
+    apns: {
+      headers: {
+        "apns-priority": "10",
+        "apns-push-type": "alert"
+      },
+      payload: {
+        aps: {
+          alert: {
+            title: safeTitle,
+            body: safeBody
+          },
+          sound: "default",
+          badge: 1
+        }
+      }
+    },
+    android: {
+      priority: "high",
+      notification: {
+        sound: "default",
+        channelId: "default"
+      }
+    },
+    data: {
+      category: category || "general",
+      referenceID: referenceId || "",
+      title: safeTitle,
+      body: safeBody
+    },
+    tokens
+  };
+}
+
+function uniqueTokens(tokens) {
+  return Array.from(
+    new Set(
+      tokens
+        .filter((token) => typeof token === "string")
+        .map((token) => token.trim())
+        .filter((token) => token.length > 0)
+    )
+  );
+}
+
 async function disableInvalidTokens(lookups, failedTokens) {
-  const db = admin.firestore();
   const failedSet = new Set(failedTokens);
 
   await Promise.all(
@@ -250,7 +245,8 @@ async function disableInvalidTokens(lookups, failedTokens) {
       .map(async (lookup) => {
         await lookup.ref.set(
           {
-            fcmToken: admin.firestore.FieldValue.delete()
+            fcmToken: admin.firestore.FieldValue.delete(),
+            fcmTokens: admin.firestore.FieldValue.arrayRemove(lookup.token)
           },
           { merge: true }
         );

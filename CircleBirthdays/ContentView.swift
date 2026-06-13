@@ -40,7 +40,7 @@ private func localized(_ english: String, language: AppLanguage) -> String {
         "Dashboard": "डैशबोर्ड",
         "Logout": "लॉग आउट",
         "Home": "होम",
-        "Upcoming Birthdays": "आने वाले जन्मदिन",
+        "Upcoming Birthdays": "आने वाले जनमदिन",
         "Quick Actions": "त्वरित विकल्प",
         "Members": "सदस्य",
         "Today": "आज",
@@ -63,7 +63,7 @@ private func localized(_ english: String, language: AppLanguage) -> String {
         "Hindu Calendar": "हिंदू कैलेंडर",
         "Events Today": "आज के कार्यक्रम",
         "Upcoming Events (7 Days)": "आगामी कार्यक्रम (7 दिन)",
-        "Birthday": "जन्मदिन",
+        "Birthday": "जनमदिन",
         "Anniversary": "वर्षगांठ",
         "Birth Anniversary": "जयंती",
         "Punya Tithi": "पुण्यतिथि",
@@ -134,10 +134,10 @@ private func localized(_ english: String, language: AppLanguage) -> String {
         "AI Assistant": "AI सहायक",
         "Family AI Assistant": "फैमिली AI सहायक",
         "Ask a question...": "सवाल पूछें...",
-        "AI Stationary Generator": "AI स्टेशनरी जेनरेटर",
-        "Generate Card": "कार्ड बनाएं",
-        "Stationary": "स्टेशनरी",
-        "Cards, stickers + collages": "कार्ड, स्टिकर + कोलाज",
+        "AI Photo Studio": "AI फोटो स्टूडियो",
+        "Generate Card": "स्टिकर बनाएं",
+        "Photo Studio": "फोटो स्टूडियो",
+        "Prompt stickers + GIFs": "प्रॉम्प्ट स्टिकर + GIF",
         "Business": "व्यवसाय",
         "Business Directory": "व्यवसाय निर्देशिका",
         "Local services": "स्थानीय सेवाएं",
@@ -388,7 +388,7 @@ struct ContentView: View {
                         } else {
                             PlaceholderFeatureScreen(
                                 viewModel: viewModel,
-                                title: localized("AI Stationary Generator", language: viewModel.language),
+                                title: localized("AI Photo Studio", language: viewModel.language),
                                 systemImage: "sparkles.rectangle.stack.fill",
                                 message: "Member profile could not be found."
                             )
@@ -409,7 +409,7 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
 
             if viewModel.currentUser != nil, viewModel.currentScreen != .login, !viewModel.currentScreen.isGameScreen {
-                FamilyAIAssistant(viewModel: viewModel)
+                FamilyAIAssistant(viewModel: viewModel, keyboardBottomInset: keyboard.bottomInset)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                     .padding(.leading, 14)
                     .padding(.bottom, 14 + keyboard.bottomInset)
@@ -2804,9 +2804,9 @@ private func dashboardQuickActions(
                     viewModel.showNearestAICardGenerator()
                 } label: {
                     DashboardActionLabel(
-                        title: localized("Stationary", language: viewModel.language),
-                        subtitle: localized("Cards, stickers + collages", language: viewModel.language),
-                        systemImage: "sparkles.rectangle.stack.fill",
+                        title: localized("Photo Studio", language: viewModel.language),
+                        subtitle: localized("Prompt stickers + GIFs", language: viewModel.language),
+                        systemImage: "wand.and.stars.inverse",
                         tint: AndroidLook.softBrown,
                         background: LinearGradient(colors: [Color.yellow.opacity(0.28), Color.pink.opacity(0.18)], startPoint: .topLeading, endPoint: .bottomTrailing),
                         layoutScale: layoutScale,
@@ -5405,6 +5405,7 @@ private struct FamilyEventRow: View {
 
 private struct FamilyAIAssistant: View {
     @Bindable var viewModel: AppViewModel
+    let keyboardBottomInset: CGFloat
     @State private var isOpen = false
     @State private var draft = ""
     @State private var messages: [AssistantMessage] = [
@@ -5413,81 +5414,97 @@ private struct FamilyAIAssistant: View {
     @State private var assistantContext = AssistantConversationContext()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if isOpen {
-                VStack(spacing: 0) {
-                    HStack {
-                        Label(localized("Family AI Assistant", language: viewModel.language), systemImage: "sparkles")
-                            .font(.subheadline.weight(.bold))
-                        Spacer()
-                        Button {
-                            isOpen = false
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.caption.weight(.bold))
-                        }
-                        .buttonStyle(.plain)
-                    }
-                    .foregroundStyle(.white)
-                    .padding(12)
-                    .background(AndroidLook.deepBrown)
+        GeometryReader { proxy in
+            let panelWidth = min(340, max(280, proxy.size.width - 28))
+            let verticalChrome: CGFloat = 118
+            let availablePanelHeight = max(
+                220,
+                proxy.size.height - keyboardBottomInset - proxy.safeAreaInsets.top - 28
+            )
+            let messageListHeight = max(104, min(260, availablePanelHeight - verticalChrome))
 
-                    ScrollViewReader { proxy in
-                        ScrollView {
-                            VStack(spacing: 8) {
-                                ForEach(messages) { message in
-                                    AssistantBubble(message: message)
-                                        .id(message.id)
+            VStack(alignment: .leading, spacing: 10) {
+                if isOpen {
+                    VStack(spacing: 0) {
+                        HStack {
+                            Label(localized("Family AI Assistant", language: viewModel.language), systemImage: "sparkles")
+                                .font(.subheadline.weight(.bold))
+                            Spacer()
+                            Button {
+                                isOpen = false
+                            } label: {
+                                Image(systemName: "xmark")
+                                    .font(.caption.weight(.bold))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .foregroundStyle(.white)
+                        .padding(12)
+                        .background(AndroidLook.deepBrown)
+
+                        ScrollViewReader { scrollProxy in
+                            ScrollView {
+                                VStack(spacing: 8) {
+                                    ForEach(messages) { message in
+                                        AssistantBubble(message: message)
+                                            .id(message.id)
+                                    }
+                                }
+                                .padding(12)
+                            }
+                            .frame(height: messageListHeight)
+                            .onAppear {
+                                if let last = messages.last {
+                                    scrollProxy.scrollTo(last.id, anchor: .bottom)
                                 }
                             }
-                            .padding(12)
-                        }
-                        .frame(height: 260)
-                        .onChange(of: messages.count) { _, _ in
-                            if let last = messages.last {
-                                proxy.scrollTo(last.id, anchor: .bottom)
+                            .onChange(of: messages.count) { _, _ in
+                                if let last = messages.last {
+                                    scrollProxy.scrollTo(last.id, anchor: .bottom)
+                                }
                             }
                         }
-                    }
 
-                    HStack(spacing: 8) {
-                        TextField(localized("Ask a question...", language: viewModel.language), text: $draft, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .lineLimit(1...3)
+                        HStack(spacing: 8) {
+                            TextField(localized("Ask a question...", language: viewModel.language), text: $draft, axis: .vertical)
+                                .textFieldStyle(.roundedBorder)
+                                .lineLimit(1...3)
 
-                        Button {
-                            send()
-                        } label: {
-                            Image(systemName: "paperplane.fill")
-                                .frame(width: 34, height: 34)
+                            Button {
+                                send()
+                            } label: {
+                                Image(systemName: "paperplane.fill")
+                                    .frame(width: 34, height: 34)
+                            }
+                            .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .buttonStyle(.borderedProminent)
+                            .tint(AndroidLook.accentGold)
                         }
-                        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                        .buttonStyle(.borderedProminent)
-                        .tint(AndroidLook.accentGold)
+                        .padding(10)
                     }
-                    .padding(10)
+                    .frame(width: panelWidth)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 22, style: .continuous)
+                            .stroke(Color.white.opacity(0.40), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.20), radius: 18, x: 0, y: 10)
+                } else {
+                    Button {
+                        isOpen = true
+                    } label: {
+                        Image(systemName: "sparkles")
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(AndroidLook.deepBrown)
+                            .frame(width: 54, height: 54)
+                            .background(AndroidLook.accentGold, in: Circle())
+                            .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(localized("AI Assistant", language: viewModel.language))
                 }
-                .frame(width: 340)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 22, style: .continuous)
-                        .stroke(Color.white.opacity(0.40), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.20), radius: 18, x: 0, y: 10)
-            } else {
-                Button {
-                    isOpen = true
-                } label: {
-                    Image(systemName: "sparkles")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(AndroidLook.deepBrown)
-                        .frame(width: 54, height: 54)
-                        .background(AndroidLook.accentGold, in: Circle())
-                        .shadow(color: .black.opacity(0.18), radius: 12, x: 0, y: 6)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(localized("AI Assistant", language: viewModel.language))
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
         }
     }
 
@@ -6367,15 +6384,20 @@ private struct AICardGeneratorScreen: View {
     @State private var fromLabel = "With love from"
     @State private var sender = "Purawale - Hum aur Humare"
     @State private var closingLine: String
-    @State private var selectedMode: StationeryMode = .card
+    @State private var selectedMode: StationeryMode = .sticker
     @State private var selectedStyle = 0
     @State private var selectedPhotoItem: PhotosPickerItem?
+    @State private var selectedCharacterPhotoItem: PhotosPickerItem?
     @State private var selectedCollageItems: [PhotosPickerItem] = []
     @State private var selectedImageData: Data?
+    @State private var selectedCharacterImageData: Data?
     @State private var selectedCollagePhotos: [Data] = []
     @State private var photoAdjustments = CardPhotoAdjustments()
     @State private var textSettings = CardTextSettings()
-    @State private var aiDirection = "Warm family wishes, elegant Indian stationery details, keepsake style"
+    @State private var aiDirection = "Create a premium transparent PNG cutout sticker with a clean white outline, expressive character pose, Indian family celebration details, crisp readable text, no background."
+    @State private var occasion: String
+    @State private var stickerConcept = "smiling celebratory character holding flowers and a small cake"
+    @State private var decorativeThemeIndex = 0
     @State private var exportURL: URL?
     @State private var exportStatus: String?
     @State private var isPhotoEditorExpanded = false
@@ -6389,6 +6411,7 @@ private struct AICardGeneratorScreen: View {
         _nameLine = State(initialValue: Self.defaultNameLine(for: member, eventType: eventType, members: viewModel.allResolvedMembers))
         _message = State(initialValue: Self.defaultMessage(for: member, eventType: eventType))
         _closingLine = State(initialValue: "We love you \(Self.defaultNameLine(for: member, eventType: eventType, members: viewModel.allResolvedMembers))")
+        _occasion = State(initialValue: Self.defaultOccasion(for: eventType))
     }
 
     private let styles: [GreetingCardStyle] = [
@@ -6484,6 +6507,25 @@ private struct AICardGeneratorScreen: View {
         )
     ]
 
+    private var selectedDecorativeTheme: StickerDecorativeTheme {
+        StickerDecorativeTheme.allCases[min(max(decorativeThemeIndex, 0), StickerDecorativeTheme.allCases.count - 1)]
+    }
+
+    private var geminiStickerPrompt: String {
+        let base = aiDirection.trimmingCharacters(in: .whitespacesAndNewlines)
+        let prompt = base.isEmpty ? "Create a premium transparent PNG cutout sticker." : base
+        return """
+        \(prompt)
+        Name: \(nameLine)
+        Occasion: \(occasion)
+        Sticker idea: \(stickerConcept)
+        Text on sticker: \(headline)
+        Small caption: \(message)
+        Decorative theme: \(selectedDecorativeTheme.promptPhrase)
+        Output: transparent-background PNG sticker, centered subject, clean cutout edges, white border, high detail, no extra words beyond the provided text.
+        """
+    }
+
     var body: some View {
         AppBackground {
             NavigationStack {
@@ -6501,21 +6543,24 @@ private struct AICardGeneratorScreen: View {
                             eventType: eventType,
                             style: styles[selectedStyle],
                             customImageData: selectedImageData,
+                            characterImageData: selectedCharacterImageData,
                             collagePhotos: selectedCollagePhotos,
                             photoAdjustments: photoAdjustments,
                             textSettings: textSettings,
-                            aiDirection: aiDirection
+                            aiDirection: geminiStickerPrompt,
+                            decorativeTheme: selectedDecorativeTheme,
+                            stickerConcept: stickerConcept
                         )
                         .frame(maxWidth: 360)
                         .aspectRatio(selectedMode.aspectRatio, contentMode: .fit)
                         .padding(.top, 12)
 
                         VStack(alignment: .leading, spacing: 14) {
-                            GroupBox("Stationary type") {
+                            GroupBox("Create") {
                                 VStack(alignment: .leading, spacing: 12) {
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 10) {
-                                            ForEach(StationeryMode.allCases) { mode in
+                                            ForEach([StationeryMode.sticker, StationeryMode.gif]) { mode in
                                                 StationeryModeChoice(
                                                     mode: mode,
                                                     selected: selectedMode == mode,
@@ -6526,27 +6571,51 @@ private struct AICardGeneratorScreen: View {
                                         .padding(.vertical, 2)
                                     }
 
-                                    TextField("AI style direction", text: $aiDirection, axis: .vertical)
+                                    if selectedMode == .gif {
+                                        Label("GIFs will use the same prompt-only Gemini flow next. Sticker creation is ready first.", systemImage: "play.rectangle.fill")
+                                            .font(.caption.weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+
+                                    TextField("Gemini studio prompt", text: $aiDirection, axis: .vertical)
                                         .textFieldStyle(.roundedBorder)
-                                        .lineLimit(2...3)
+                                        .lineLimit(3...5)
                                 }
                             }
 
-                            GroupBox("Style") {
+                            GroupBox("Sticker brief") {
+                                VStack(alignment: .leading, spacing: 9) {
+                                    TextField("Name", text: $nameLine)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Occasion", text: $occasion)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Sticker idea", text: $stickerConcept, axis: .vertical)
+                                        .textFieldStyle(.roundedBorder)
+                                        .lineLimit(2...4)
+                                    TextField("Main sticker text", text: $headline)
+                                        .textFieldStyle(.roundedBorder)
+                                    TextField("Small caption", text: $message, axis: .vertical)
+                                        .textFieldStyle(.roundedBorder)
+                                        .lineLimit(2...4)
+                                }
+                                .padding(.top, 4)
+                            }
+
+                            GroupBox("Decorative theme") {
                                 VStack(alignment: .leading, spacing: 12) {
                                     ScrollView(.horizontal, showsIndicators: false) {
                                         HStack(spacing: 12) {
-                                            ForEach(styles.indices, id: \.self) { index in
-                                                CardFrameChoice(
-                                                    style: styles[index],
-                                                    selected: selectedStyle == index,
-                                                    action: { selectedStyle = index }
+                                            ForEach(StickerDecorativeTheme.allCases.indices, id: \.self) { index in
+                                                StickerThemeChoice(
+                                                    theme: StickerDecorativeTheme.allCases[index],
+                                                    selected: decorativeThemeIndex == index,
+                                                    action: { decorativeThemeIndex = index }
                                                 )
                                             }
                                         }
                                         .padding(.vertical, 2)
                                     }
-                                    Picker("Style", selection: $selectedStyle) {
+                                    Picker("Card frame palette", selection: $selectedStyle) {
                                         ForEach(styles.indices, id: \.self) { index in
                                             Text(styles[index].name).tag(index)
                                         }
@@ -6559,18 +6628,18 @@ private struct AICardGeneratorScreen: View {
                                 VStack(spacing: 12) {
                                     PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                                         AndroidIconActionButtonLabel(
-                                            title: selectedImageData == nil ? "Add photo" : "Change photo",
-                                            subtitle: selectedMode == .card ? "Card portrait" : "Main photo",
+                                            title: selectedImageData == nil ? "Add base photo" : "Change base photo",
+                                            subtitle: "Optional Gemini reference",
                                             systemImage: "photo.on.rectangle.angled"
                                         )
                                     }
                                     .buttonStyle(.plain)
 
-                                    PhotosPicker(selection: $selectedCollageItems, maxSelectionCount: 12, matching: .images) {
+                                    PhotosPicker(selection: $selectedCharacterPhotoItem, matching: .images) {
                                         AndroidIconActionButtonLabel(
-                                            title: selectedCollagePhotos.isEmpty ? "Add many photos" : "\(selectedCollagePhotos.count) photos selected",
-                                            subtitle: "Collage, GIF + memory versions",
-                                            systemImage: "rectangle.stack.badge.person.crop"
+                                            title: selectedCharacterImageData == nil ? "Add character photo" : "Change character photo",
+                                            subtitle: "Cutout sticker character",
+                                            systemImage: "person.crop.artframe"
                                         )
                                     }
                                     .buttonStyle(.plain)
@@ -6582,34 +6651,15 @@ private struct AICardGeneratorScreen: View {
                                 }
                                 .padding(.top, 8)
                             } label: {
-                                Label("Photo editor", systemImage: "slider.horizontal.3")
+                                Label("Photo editor", systemImage: "camera.filters")
                                     .font(.headline)
-                            }
-
-                            GroupBox("Card text") {
-                                VStack(alignment: .leading, spacing: 9) {
-                                    TextField("Headline", text: $headline)
-                                        .textFieldStyle(.roundedBorder)
-                                    TextField("Name label on card", text: $nameLine)
-                                        .textFieldStyle(.roundedBorder)
-                                    TextField("Wish message", text: $message, axis: .vertical)
-                                        .textFieldStyle(.roundedBorder)
-                                        .lineLimit(2...4)
-                                    TextField("From label", text: $fromLabel)
-                                        .textFieldStyle(.roundedBorder)
-                                    TextField("Sender / addressee", text: $sender)
-                                        .textFieldStyle(.roundedBorder)
-                                    TextField("Closing line", text: $closingLine)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                                .padding(.top, 4)
                             }
 
                             DisclosureGroup(isExpanded: $isTextStyleExpanded) {
                                 TextStyleControls(style: styles[selectedStyle], settings: $textSettings)
                                     .padding(.top, 8)
                             } label: {
-                                Label("Text style", systemImage: "textformat")
+                                Label("Sticker text style", systemImage: "textformat")
                                     .font(.headline)
                             }
 
@@ -6617,20 +6667,29 @@ private struct AICardGeneratorScreen: View {
                                 regenerate()
                             } label: {
                                 AndroidIconActionButtonLabel(
-                                    title: "Regenerate",
-                                    subtitle: selectedMode.regenerateSubtitle,
+                                    title: "Refresh sticker prompt",
+                                    subtitle: "Name, occasion + cutout style",
                                     systemImage: "sparkles"
                                 )
                             }
                             .buttonStyle(.plain)
+
+                            GroupBox("Gemini prompt") {
+                                Text(geminiStickerPrompt)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(AndroidLook.deepBrown)
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.vertical, 4)
+                            }
 
                             VStack(alignment: .leading, spacing: 8) {
                                 Button {
                                     exportStationery()
                                 } label: {
                                     AndroidIconActionButtonLabel(
-                                        title: "Download photo",
-                                        subtitle: "PNG of this design",
+                                        title: "Download sticker preview",
+                                        subtitle: "PNG mockup for sharing",
                                         systemImage: "square.and.arrow.down"
                                     )
                                 }
@@ -6638,7 +6697,7 @@ private struct AICardGeneratorScreen: View {
 
                                 if let exportURL {
                                     ShareLink(item: exportURL) {
-                                        Label("Share / Save downloaded photo", systemImage: "square.and.arrow.up")
+                                        Label("Share / Save sticker preview", systemImage: "square.and.arrow.up")
                                             .frame(maxWidth: .infinity)
                                     }
                                     .buttonStyle(.borderedProminent)
@@ -6670,6 +6729,14 @@ private struct AICardGeneratorScreen: View {
                         exportURL = nil
                     }
                 }
+                .task(id: selectedCharacterPhotoItem) {
+                    guard let selectedCharacterPhotoItem else { return }
+                    if let data = try? await selectedCharacterPhotoItem.loadTransferable(type: Data.self) {
+                        selectedCharacterImageData = data
+                        photoAdjustments = CardPhotoAdjustments()
+                        exportURL = nil
+                    }
+                }
                 .task(id: selectedCollageItems) {
                     var loadedPhotos: [Data] = []
                     for item in selectedCollageItems {
@@ -6680,7 +6747,7 @@ private struct AICardGeneratorScreen: View {
                     selectedCollagePhotos = loadedPhotos
                     exportURL = nil
                 }
-                .navigationTitle(localized("AI Stationary Generator", language: viewModel.language))
+                .navigationTitle(localized("AI Photo Studio", language: viewModel.language))
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
@@ -6696,6 +6763,7 @@ private struct AICardGeneratorScreen: View {
     private func regenerate() {
         let options = selectedMode.messageOptions(defaultMessage: Self.defaultMessage(for: member, eventType: eventType))
         message = options.randomElement() ?? message
+        stickerConcept = Self.stickerConceptOptions(for: occasion).randomElement() ?? stickerConcept
         exportURL = nil
     }
 
@@ -6714,10 +6782,13 @@ private struct AICardGeneratorScreen: View {
             eventType: eventType,
             style: styles[selectedStyle],
             customImageData: selectedImageData,
+            characterImageData: selectedCharacterImageData,
             collagePhotos: selectedCollagePhotos,
             photoAdjustments: photoAdjustments,
             textSettings: textSettings,
-            aiDirection: aiDirection
+            aiDirection: geminiStickerPrompt,
+            decorativeTheme: selectedDecorativeTheme,
+            stickerConcept: stickerConcept
         )
         .frame(width: width, height: width / selectedMode.aspectRatio)
 
@@ -6725,7 +6796,7 @@ private struct AICardGeneratorScreen: View {
         renderer.scale = 2
 
         guard let image = renderer.uiImage, let data = image.pngData() else {
-            exportStatus = "Could not render this stationary photo."
+            exportStatus = "Could not render this sticker preview."
             return
         }
 
@@ -6734,9 +6805,9 @@ private struct AICardGeneratorScreen: View {
         do {
             try data.write(to: url, options: .atomic)
             exportURL = url
-            exportStatus = "Downloaded photo is ready to share or save."
+            exportStatus = "Downloaded sticker preview is ready to share or save."
         } catch {
-            exportStatus = "Could not save the downloaded photo."
+            exportStatus = "Could not save the downloaded sticker preview."
         }
     }
 
@@ -6762,6 +6833,28 @@ private struct AICardGeneratorScreen: View {
             return "Remembering with gratitude, love, and the quiet strength of family memories."
         }
     }
+
+    private static func defaultOccasion(for eventType: DashboardFamilyEvent.EventType) -> String {
+        switch eventType {
+        case .birthday:
+            return "Birthday"
+        case .anniversary:
+            return "Anniversary"
+        case .remembrance:
+            return "Remembrance"
+        }
+    }
+
+    private static func stickerConceptOptions(for occasion: String) -> [String] {
+        let occasion = occasion.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = occasion.isEmpty ? "special day" : occasion.lowercased()
+        return [
+            "smiling celebratory character holding flowers for a \(label)",
+            "cute cutout character with gift box, sparkles, and warm family energy",
+            "premium sticker mascot with handwritten-style wish and festive accents",
+            "expressive portrait sticker with clean white outline and joyful pose"
+        ]
+    }
 }
 
 private struct GreetingCardStyle {
@@ -6773,6 +6866,61 @@ private struct GreetingCardStyle {
     let accent: Color
     let photoBorder: Color
     let plate: Color
+}
+
+private enum StickerDecorativeTheme: String, CaseIterable, Identifiable {
+    case celebration
+    case floral
+    case festival
+    case playful
+    case elegant
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .celebration: return "Celebration"
+        case .floral: return "Floral"
+        case .festival: return "Festival"
+        case .playful: return "Playful"
+        case .elegant: return "Elegant"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .celebration: return "party.popper.fill"
+        case .floral: return "camera.macro"
+        case .festival: return "flame.fill"
+        case .playful: return "sparkles"
+        case .elegant: return "seal.fill"
+        }
+    }
+
+    var promptPhrase: String {
+        switch self {
+        case .celebration:
+            return "confetti, balloons, cake sprinkles, bright celebration accents"
+        case .floral:
+            return "soft flowers, leaves, petals, graceful garden accents"
+        case .festival:
+            return "marigold garlands, diyas, gold sparkle, Indian festive accents"
+        case .playful:
+            return "rounded doodles, stars, hearts, cute sticker energy"
+        case .elegant:
+            return "minimal premium gold accents, soft glow, refined keepsake styling"
+        }
+    }
+
+    var symbols: [String] {
+        switch self {
+        case .celebration: return ["✦", "★", "•"]
+        case .floral: return ["✿", "❀", "•"]
+        case .festival: return ["✦", "◆", "•"]
+        case .playful: return ["★", "♥", "✦"]
+        case .elegant: return ["◆", "✦", "•"]
+        }
+    }
 }
 
 private enum StationeryMode: String, CaseIterable, Identifiable {
@@ -6787,8 +6935,8 @@ private enum StationeryMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .card: return "Card"
-        case .sticker: return "Wish Sticker"
-        case .gif: return "GIF"
+        case .sticker: return "Prompt Sticker"
+        case .gif: return "Prompt GIF"
         case .collage: return "Collage"
         case .vintage: return "Vintage Memory"
         }
@@ -6797,8 +6945,8 @@ private enum StationeryMode: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .card: return "Classic photo wish"
-        case .sticker: return "Cutout-style wish"
-        case .gif: return "Animated idea board"
+        case .sticker: return "Gemini cutout PNG"
+        case .gif: return "Prompt animation"
         case .collage: return "Many-photo layout"
         case .vintage: return "Classic memory photo"
         }
@@ -6923,10 +7071,13 @@ private struct StationeryPreview: View {
     let eventType: DashboardFamilyEvent.EventType
     let style: GreetingCardStyle
     let customImageData: Data?
+    let characterImageData: Data?
     let collagePhotos: [Data]
     let photoAdjustments: CardPhotoAdjustments
     let textSettings: CardTextSettings
     let aiDirection: String
+    let decorativeTheme: StickerDecorativeTheme
+    let stickerConcept: String
 
     var body: some View {
         switch mode {
@@ -6952,9 +7103,11 @@ private struct StationeryPreview: View {
                 nameLine: nameLine,
                 message: message,
                 style: style,
-                customImageData: customImageData,
+                customImageData: characterImageData ?? customImageData,
                 photoAdjustments: photoAdjustments,
-                textSettings: textSettings
+                textSettings: textSettings,
+                decorativeTheme: decorativeTheme,
+                stickerConcept: stickerConcept
             )
         case .gif:
             GifStoryboardPreview(
@@ -7016,6 +7169,33 @@ private struct StationeryModeChoice: View {
             .padding(10)
             .frame(width: 132, alignment: .leading)
             .frame(minHeight: 74)
+            .background(selected ? AndroidLook.accentGold.opacity(0.22) : Color.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(selected ? AndroidLook.accentGold : Color.secondary.opacity(0.25), lineWidth: selected ? 2 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct StickerThemeChoice: View {
+    let theme: StickerDecorativeTheme
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                Image(systemName: theme.systemImage)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(selected ? AndroidLook.deepBrown : AndroidLook.accentGold)
+                Text(theme.title)
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(AndroidLook.deepBrown)
+                    .lineLimit(1)
+            }
+            .frame(width: 96, height: 72)
             .background(selected ? AndroidLook.accentGold.opacity(0.22) : Color.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -7185,6 +7365,8 @@ private struct WishStickerPreview: View {
     let customImageData: Data?
     let photoAdjustments: CardPhotoAdjustments
     let textSettings: CardTextSettings
+    let decorativeTheme: StickerDecorativeTheme
+    let stickerConcept: String
 
     private var textColor: Color {
         cardStudioTextColor(style: style, settings: textSettings)
@@ -7192,7 +7374,7 @@ private struct WishStickerPreview: View {
 
     var body: some View {
         ZStack {
-            style.background
+            Color.clear
             stickerAccentBackground
 
             VStack(spacing: 12) {
@@ -7209,8 +7391,10 @@ private struct WishStickerPreview: View {
                     border: style.photoBorder
                 )
                 .clipShape(Circle())
+                .overlay(Circle().stroke(.white, lineWidth: 9))
                 .overlay(Circle().stroke(style.accent, lineWidth: 4))
                 .frame(width: 190, height: 190)
+                .shadow(color: style.accent.opacity(0.22), radius: 14, x: 0, y: 8)
 
                 Text(nameLine)
                     .font(cardStudioFont(size: 31, weight: .heavy, settings: textSettings))
@@ -7218,11 +7402,23 @@ private struct WishStickerPreview: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.62)
 
+                Text(stickerConcept)
+                    .font(cardStudioFont(size: 11, weight: .bold, settings: textSettings))
+                    .foregroundStyle(textColor.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.68)
+                    .padding(.horizontal, 14)
+
                 messagePlate
             }
             .padding(34)
-            .padding(34)
         }
+        .background(style.background.opacity(0.78), in: RoundedRectangle(cornerRadius: 42, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 42, style: .continuous)
+                .stroke(.white, lineWidth: 8)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 42, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 14, x: 0, y: 8)
     }
@@ -7247,16 +7443,18 @@ private struct WishStickerPreview: View {
 
     private var stickerAccentBackground: some View {
         ZStack {
-            Circle()
-                .fill(style.accent.opacity(0.16))
-                .frame(width: 310, height: 310)
-                .offset(x: -118, y: -118)
-            Circle()
-                .fill(style.primary.opacity(0.10))
-                .frame(width: 240, height: 240)
-                .offset(x: 128, y: 118)
+            ForEach(0..<16, id: \.self) { index in
+                Text(decorativeTheme.symbols[index % decorativeTheme.symbols.count])
+                    .font(.system(size: CGFloat([14, 18, 23, 28][index % 4]), weight: .heavy))
+                    .foregroundStyle(index.isMultiple(of: 2) ? style.accent.opacity(0.50) : style.primary.opacity(0.28))
+                    .rotationEffect(.degrees(Double(index * 23)))
+                    .offset(
+                        x: CGFloat((index * 61) % 280) - 140,
+                        y: CGFloat((index * 43) % 300) - 150
+                    )
+            }
             RoundedRectangle(cornerRadius: 42, style: .continuous)
-                .stroke(style.accent.opacity(0.55), lineWidth: 4)
+                .stroke(style.accent.opacity(0.44), lineWidth: 3)
                 .padding(14)
         }
     }

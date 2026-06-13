@@ -79,8 +79,8 @@ final class PushNotificationCoordinator: NSObject {
     }
 
     func syncPushToken(for member: Member, using repository: MemberRepository) async {
-        guard let token = fcmToken ?? deviceToken else {
-            pushLogger.error("No APNs or FCM token available to sync for member \(member.id, privacy: .private).")
+        guard let token = fcmToken else {
+            pushLogger.error("No FCM token available to sync for member \(member.id, privacy: .private).")
             return
         }
 
@@ -118,7 +118,8 @@ final class PushNotificationCoordinator: NSObject {
             "recipientIds": recipientIDs,
             "category": category,
             "status": "QUEUED",
-            "createdAt": Timestamp(date: .now)
+            "createdAt": Timestamp(date: .now),
+            "timestamp": Timestamp(date: .now)
         ]
 
         if let referenceID {

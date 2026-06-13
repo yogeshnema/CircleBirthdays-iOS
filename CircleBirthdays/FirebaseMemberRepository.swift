@@ -73,7 +73,13 @@ struct FirebaseMemberRepository: MemberRepository {
         try await Firestore.firestore()
             .collection(collection)
             .document(userID)
-            .setData(["fcmToken": token], merge: true)
+            .setData(
+                [
+                    "fcmToken": token,
+                    "fcmTokens": FieldValue.arrayUnion([token])
+                ],
+                merge: true
+            )
         #else
         throw FirebaseRepositoryError.sdkMissing
         #endif

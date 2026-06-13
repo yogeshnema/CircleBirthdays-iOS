@@ -2336,7 +2336,7 @@ final class AppViewModel {
 
     private func syncCurrentUserPushToken(tokenOverride: String? = nil) {
         guard let currentUser = currentUser else { return }
-        let token = tokenOverride ?? PushNotificationCoordinator.shared.fcmToken ?? PushNotificationCoordinator.shared.deviceToken
+        let token = tokenOverride ?? PushNotificationCoordinator.shared.fcmToken
         guard let token, !token.isEmpty else { return }
         guard currentUser.fcmToken != token else { return }
 

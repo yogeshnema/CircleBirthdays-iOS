@@ -23,3 +23,6 @@ GoogleService-Info.plist
 # Build output
 DerivedData/
 build/
+
+# Node dependencies
+node_modules/

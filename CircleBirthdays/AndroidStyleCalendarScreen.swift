@@ -1177,7 +1177,7 @@ private struct CalendarFamilyEvent: Identifiable {
     func label(language: AppLanguage) -> String {
         switch kind {
         case .birthday:
-            return language == .hindi ? "जन्मदिन" : "Birthday"
+            return language == .hindi ? "जनमदिन" : "Birthday"
         case .anniversary:
             return language == .hindi ? "वर्षगांठ" : "Anniversary"
         case .punyaTithi:
